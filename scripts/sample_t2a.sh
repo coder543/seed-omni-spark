@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BASE_URL="${1:-http://localhost:8000/b/v1}"
 OUT_DIR="${2:-./samples}"
 OUT_FILE="${3:-omni_audio.wav}"
@@ -30,7 +31,24 @@ if [[ -z "$AUDIO_B64" ]]; then
   exit 1
 fi
 
-AUDIO_URL=$(printf '%s' "$AUDIO_B64" | base64 -d)
+# Some responses omit base64 padding; base64 may warn but still decode.
+# Use Python for robust decoding and avoid noisy stderr.
+PYTHON_BIN="$ROOT_DIR/.venv/bin/python"
+if [[ ! -x "$PYTHON_BIN" ]]; then
+  PYTHON_BIN="python3"
+fi
+
+AUDIO_URL=$("$PYTHON_BIN" - <<'PY'
+import base64, os, sys
+data = os.environ.get("AUDIO_B64", "")
+if not data:
+    sys.exit(1)
+# Add padding if missing
+pad = (-len(data)) % 4
+data += "=" * pad
+print(base64.b64decode(data).decode("utf-8"), end="")
+PY
+)
 AUDIO_URL_LOCAL=$(echo "$AUDIO_URL" | sed 's|http://minio:9000|http://localhost:9000|')
 
 curl -sS "$AUDIO_URL_LOCAL" -o "$OUT_DIR/$OUT_FILE"
