@@ -106,6 +106,11 @@ set_env OMNI_DECODER_VISION_MODEL_PATH "$VD_DIR"
 set_env OMNI_ENCODER_AUDIO_MODEL_PATH "$AE_DIR"
 set_env OMNI_DECODER_AUDIO_TORCHSERVE_MODEL_PATH "$AD_DIR"
 
+# Keep vLLM in eager mode by default for stability on newer GPUs.
+if [[ -z "${OMNI_VLLM_EXTRA_ARGS:-}" ]]; then
+  set_env OMNI_VLLM_EXTRA_ARGS "--enforce-eager"
+fi
+
 # Build + run
 cd "$ROOT_DIR"
 
