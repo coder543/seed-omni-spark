@@ -14,7 +14,9 @@ if [[ ! -d "$SUBMODULE_DIR" ]]; then
   exit 1
 fi
 
-# Apply patch from repo root (a/ b/ style paths)
-patch -p1 -d "$SUBMODULE_DIR" < "$PATCH_FILE"
+# Apply patch from repo root (a/ b/ style paths), non-interactive.
+# -N: ignore already-applied hunks
+# --batch: never prompt
+patch -p1 -N --batch -d "$SUBMODULE_DIR" < "$PATCH_FILE"
 
 echo "Applied patch to $SUBMODULE_DIR"
