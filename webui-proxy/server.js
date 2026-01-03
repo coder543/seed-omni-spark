@@ -27,6 +27,7 @@ const AUDIO_PCM_SAMPLE_RATE = Number(process.env.AUDIO_PCM_SAMPLE_RATE || 24000)
 const AUDIO_TOKEN_CHUNK_SIZE = Number(process.env.AUDIO_TOKEN_CHUNK_SIZE || 150);
 const AUDIO_STREAMING_MAX_BASE64 = Number(process.env.AUDIO_STREAMING_MAX_BASE64 || 400000);
 const AUDIO_PROGRESS_INTERVAL = Number(process.env.AUDIO_PROGRESS_INTERVAL || 10);
+const AUDIO_TOKEN_LOG = process.env.AUDIO_TOKEN_LOG === '1';
 const VISION_DECODER_ENDPOINT =
   process.env.VISION_DECODER_ENDPOINT || 'http://omni-decoder-vision-api:10063/decode';
 const S3_ENDPOINT = process.env.NCP_S3_ENDPOINT;
@@ -391,6 +392,16 @@ async function streamSseWithTransform(upstream, res, options = {}) {
     res.write(`data: ${JSON.stringify(payload)}\n\n`);
   };
 
+  const debugAudioTokens = (label, tokens) => {
+    if (!AUDIO_TOKEN_LOG) return;
+    if (!tokens || tokens.length === 0) return;
+    const preview = tokens.slice(0, 12);
+    const tail = tokens.slice(-12);
+    console.log(
+      `[audio-debug] ${label} count=${tokens.length} first=[${preview.join(',')}] last=[${tail.join(',')}]`
+    );
+  };
+
   const emitAudioChunkIfSafe = (wavBuf) => {
     if (!wavBuf || wavBuf.length === 0) return;
     if (AUDIO_STREAMING_MAX_BASE64 <= 0) return;
@@ -445,6 +456,7 @@ async function streamSseWithTransform(upstream, res, options = {}) {
 
   const enqueueAudioTokens = (newTokens) => {
     if (!newTokens || newTokens.length === 0) return;
+    debugAudioTokens('enqueue', newTokens);
     allAudioTokens.push(...newTokens);
     audioTokensReceived += newTokens.length;
     const interval = Number.isFinite(AUDIO_PROGRESS_INTERVAL) && AUDIO_PROGRESS_INTERVAL > 0
@@ -457,6 +469,7 @@ async function streamSseWithTransform(upstream, res, options = {}) {
     audioTokenBuffer.push(...newTokens);
     while (audioTokenBuffer.length >= audioChunkSize) {
       const chunk = audioTokenBuffer.splice(0, audioChunkSize);
+      debugAudioTokens('chunk', chunk);
       queueAudioDecode(chunk);
     }
   };
@@ -527,6 +540,17 @@ async function streamSseWithTransform(upstream, res, options = {}) {
       }
       res.write(`data: ${JSON.stringify(cloned)}\n\n`);
     }
+  };
+
+  const flushThinkCarry = (parsed) => {
+    if (!thinkCarry) return;
+    const carry = thinkCarry;
+    thinkCarry = '';
+    const segment = {
+      type: thinkInProgress ? 'reasoning' : 'content',
+      text: carry
+    };
+    emitSegments(parsed, [segment]);
   };
 
   const flushExtras = async () => {
@@ -610,11 +634,25 @@ async function streamSseWithTransform(upstream, res, options = {}) {
                   audioTokenDetected = true;
                   const before = combined.slice(0, audioIdx);
                   const after = combined.slice(audioIdx);
+                  if (AUDIO_TOKEN_LOG) {
+                    console.log('[audio-debug] detect audio boundary', {
+                      beforeLen: before.length,
+                      afterLen: after.length,
+                      prefixBufferLen: prefixBuffer.length,
+                      thinkCarryLen: thinkCarry.length
+                    });
+                  }
+                  if (thinkCarry) {
+                    flushThinkCarry(parsed);
+                  }
                   const cleaned = stripTranscriptTags(before);
                   const emitContent = cleaned || before;
                   if (emitContent) {
                     const segments = splitThinkSegments(emitContent);
                     if (segments.length > 0) emitSegments(parsed, segments);
+                    if (thinkCarry) {
+                      flushThinkCarry(parsed);
+                    }
                   }
                   prefixBuffer = '';
                   const tokens = extractAudioTokensFromText(after);
@@ -674,6 +712,15 @@ async function streamSseWithTransform(upstream, res, options = {}) {
     }
   } finally {
     if (!audioTokenDetected) {
+      if (thinkCarry) {
+        flushThinkCarry({
+          id: meta.id || `chatcmpl-${crypto.randomUUID().replace(/-/g, '')}`,
+          object: 'chat.completion.chunk',
+          created: meta.created || Math.floor(Date.now() / 1000),
+          model: meta.model || 'track_b_model',
+          choices: [{ index: 0, delta: { content: '' } }]
+        });
+      }
       const tail = prefixBuffer;
       const cleaned = stripTranscriptTags(tail);
       if (cleaned) {
@@ -693,6 +740,15 @@ async function streamSseWithTransform(upstream, res, options = {}) {
       }
     }
     if (audioTokenDetected && !audio) {
+      if (thinkCarry) {
+        flushThinkCarry({
+          id: meta.id || `chatcmpl-${crypto.randomUUID().replace(/-/g, '')}`,
+          object: 'chat.completion.chunk',
+          created: meta.created || Math.floor(Date.now() / 1000),
+          model: meta.model || 'track_b_model',
+          choices: [{ index: 0, delta: { content: '' } }]
+        });
+      }
       if (prefixBuffer) {
         const cleaned = stripTranscriptTags(prefixBuffer);
         if (cleaned) {
@@ -714,6 +770,7 @@ async function streamSseWithTransform(upstream, res, options = {}) {
       }
       if (audioTokenBuffer.length > 0) {
         const remaining = audioTokenBuffer.splice(0, audioTokenBuffer.length);
+        debugAudioTokens('final-buffer', remaining);
         queueAudioDecode(remaining);
       }
       try {
@@ -737,6 +794,7 @@ async function streamSseWithTransform(upstream, res, options = {}) {
         }
       }
       if (!finalWav && !audioFinalDecodeFailed && allAudioTokens.length >= 3) {
+        debugAudioTokens('final-all', allAudioTokens);
         const audioChunk = await fetchTorchserveAudio(
           allAudioTokens,
           extractSpeakerId(fullContent) || AUDIO_TORCHSERVE_SPEAKER
