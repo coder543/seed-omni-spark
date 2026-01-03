@@ -102,7 +102,7 @@ echo "[INFO] Streaming logs until healthy..."
 
 # Wait for health
 READY=0
-for i in $(seq 1 180); do
+for i in $(seq 1 360); do
   if curl -fsS http://localhost:10032/health >/dev/null 2>&1 && \
      curl -fsS http://localhost:8000/health >/dev/null 2>&1; then
     READY=1
