@@ -15,12 +15,23 @@ if [[ ! -d "$SUBMODULE_DIR" ]]; then
 fi
 
 if command -v git >/dev/null 2>&1 && [[ -e "$SUBMODULE_DIR/.git" ]]; then
-  # Prefer git apply for clean, non-interactive behavior.
-  if git -C "$SUBMODULE_DIR" apply --check "$PATCH_FILE" >/dev/null 2>&1; then
-    git -C "$SUBMODULE_DIR" apply "$PATCH_FILE"
-    echo "Applied patch to $SUBMODULE_DIR"
+  # Use an absolute path so git -C can find the patch file.
+  PATCH_ABS="$PATCH_FILE"
+  if command -v realpath >/dev/null 2>&1; then
+    PATCH_ABS="$(realpath "$PATCH_FILE")"
   else
-    echo "Patch already applied or not clean; skipping."
+    PATCH_ABS="$(cd "$(dirname "$PATCH_FILE")" && pwd)/$(basename "$PATCH_FILE")"
+  fi
+
+  # Prefer git apply for clean, non-interactive behavior.
+  if git -C "$SUBMODULE_DIR" apply --check "$PATCH_ABS" >/dev/null 2>&1; then
+    git -C "$SUBMODULE_DIR" apply "$PATCH_ABS"
+    echo "Applied patch to $SUBMODULE_DIR"
+  elif git -C "$SUBMODULE_DIR" apply --reverse --check "$PATCH_ABS" >/dev/null 2>&1; then
+    echo "Patch already applied; skipping."
+  else
+    echo "Patch did not apply cleanly. Resolve conflicts in $SUBMODULE_DIR." >&2
+    exit 1
   fi
 else
   # Fallback to patch if git is unavailable.

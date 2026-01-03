@@ -48,7 +48,7 @@ fi
 # Apply patch (idempotent-ish)
 if [[ -f "$ROOT_DIR/patches/omniserv.clean.patch" ]]; then
   echo "[INFO] Applying OmniServe patch..."
-  "$ROOT_DIR/scripts/apply_omniserv_patch.sh" || true
+  "$ROOT_DIR/scripts/apply_omniserv_patch.sh"
 fi
 
 # Download model if missing
