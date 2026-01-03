@@ -1,0 +1,82 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# One-shot launcher for DGX Spark.
+# - Initializes submodule + applies patch
+# - Downloads + converts model if needed
+# - Builds and launches Docker Compose
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Configurable locations
+MODEL_ROOT="${MODEL_ROOT:-$ROOT_DIR/models}"
+TRACK_B_DIR="$MODEL_ROOT/track_b"
+
+LLM_DIR="$TRACK_B_DIR/llm/HyperCLOVAX-SEED-Omni-8B"
+VE_DIR="$TRACK_B_DIR/ve"
+VD_DIR="$TRACK_B_DIR/vd"
+AE_DIR="$TRACK_B_DIR/ae"
+AD_DIR="$TRACK_B_DIR/ad"
+
+# Ensure submodule
+if [[ -d "$ROOT_DIR/OmniServe" ]]; then
+  if [[ ! -f "$ROOT_DIR/OmniServe/.git" ]]; then
+    echo "[INFO] OmniServe submodule not initialized. Initializing..."
+    git submodule update --init --recursive
+  fi
+else
+  echo "[INFO] OmniServe directory missing. Initializing submodule..."
+  git submodule update --init --recursive
+fi
+
+# Apply patch (idempotent-ish)
+if [[ -f "$ROOT_DIR/patches/omniserv.clean.patch" ]]; then
+  echo "[INFO] Applying OmniServe patch..."
+  "$ROOT_DIR/scripts/apply_omniserv_patch.sh" || true
+fi
+
+# Download model if missing
+if [[ ! -d "$LLM_DIR" ]]; then
+  echo "[INFO] Model not found at $LLM_DIR"
+  echo "[INFO] Downloading model to $TRACK_B_DIR/llm ..."
+  "$ROOT_DIR/scripts/download_model.sh" "$TRACK_B_DIR/llm"
+fi
+
+# Convert if needed
+if [[ ! -d "$VE_DIR" ]] || [[ ! -d "$VD_DIR" ]] || [[ ! -d "$AE_DIR" ]] || [[ ! -d "$AD_DIR" ]]; then
+  echo "[INFO] Converted components missing. Running conversion..."
+  "$ROOT_DIR/scripts/convert_model.sh" "$TRACK_B_DIR"
+fi
+
+# Ensure env
+if [[ ! -f "$ROOT_DIR/.env" ]]; then
+  echo "[INFO] .env missing, creating from .env.example"
+  cp "$ROOT_DIR/.env.example" "$ROOT_DIR/.env"
+fi
+
+# Helper: set or replace key in .env
+set_env() {
+  local key="$1"
+  local val="$2"
+  if grep -qE "^${key}=" "$ROOT_DIR/.env"; then
+    sed -i "s|^${key}=.*|${key}=${val}|" "$ROOT_DIR/.env"
+  else
+    echo "${key}=${val}" >> "$ROOT_DIR/.env"
+  fi
+}
+
+set_env OMNI_MODEL_PATH "$LLM_DIR"
+set_env VISION_ENCODER_PATH "$VE_DIR"
+set_env VISION_DECODER_PATH "$VD_DIR"
+set_env AUDIO_ENCODER_PATH "$AE_DIR"
+set_env AUDIO_DECODER_PATH "$AD_DIR"
+
+# Build + run
+cd "$ROOT_DIR"
+
+docker compose -f docker-compose.track-b.yaml build
+
+docker compose -f docker-compose.track-b.yaml up -d
+
+echo "[INFO] OmniServe is starting. Tail logs with:"
+echo "  docker compose -f docker-compose.track-b.yaml logs -f omni"

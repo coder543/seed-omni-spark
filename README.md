@@ -41,6 +41,14 @@ Apply our OmniServe patch:
 ./scripts/apply_omniserv_patch.sh
 ```
 
+### One-shot run
+
+If you want a single command that handles submodules, patching, model download/convert, and Compose:
+
+```bash
+./run.sh
+```
+
 ---
 
 ## 2) Model Weights
