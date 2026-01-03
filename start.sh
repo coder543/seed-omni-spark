@@ -36,13 +36,13 @@ if [[ ! -d "$ROOT_DIR/.venv" ]]; then
   python3 -m venv "$ROOT_DIR/.venv"
 fi
 
-echo "[INFO] Ensuring Python deps (huggingface_hub, torch, safetensors, openai, easydict) ..."
+echo "[INFO] Ensuring Python deps (huggingface_hub, torch, safetensors, openai, easydict, numpy) ..."
 if ! "$ROOT_DIR/.venv/bin/python" - <<'PY' >/dev/null 2>&1
-import huggingface_hub, safetensors, torch, openai, easydict
+import huggingface_hub, safetensors, torch, openai, easydict, numpy
 PY
 then
   "$ROOT_DIR/.venv/bin/python" -m pip install --upgrade pip >/dev/null
-  "$ROOT_DIR/.venv/bin/pip" install -q huggingface_hub safetensors torch openai easydict
+  "$ROOT_DIR/.venv/bin/pip" install -q huggingface_hub safetensors torch openai easydict numpy
 fi
 
 # Apply patch (idempotent-ish)
@@ -59,9 +59,11 @@ if [[ ! -d "$LLM_DIR" ]]; then
 fi
 
 # Convert if needed
-if [[ ! -d "$VE_DIR" ]] || [[ ! -d "$VD_DIR" ]] || [[ ! -d "$AE_DIR" ]] || [[ ! -d "$AD_DIR" ]]; then
+CONVERT_MARKER="$TRACK_B_DIR/.conversion_complete"
+if [[ ! -f "$CONVERT_MARKER" ]] || [[ ! -d "$VE_DIR" ]] || [[ ! -d "$VD_DIR" ]] || [[ ! -d "$AE_DIR" ]] || [[ ! -d "$AD_DIR" ]]; then
   echo "[INFO] Converted components missing. Running conversion..."
   "$ROOT_DIR/scripts/convert_model.sh" "$TRACK_B_DIR/llm" "$TRACK_B_DIR"
+  touch "$CONVERT_MARKER"
 fi
 
 # Ensure env
