@@ -49,6 +49,10 @@ If you want a single command that handles submodules, patching, model download/c
 ./start.sh
 ```
 
+Note: first-time builds (especially the OmniServe compile step) can take ~20 minutes on DGX Spark, not including model download time.
+```
+```
+
 You can override the model location (default is `./models`):
 
 ```bash
