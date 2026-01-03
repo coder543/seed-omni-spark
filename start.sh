@@ -58,14 +58,14 @@ REQ_MIN="$ROOT_DIR/OmniServe/decoder/vision/track_b/requirements.min.txt"
 REQ_FULL="$ROOT_DIR/OmniServe/decoder/vision/track_b/requirements.txt"
 if [[ ! -f "$REQ_MIN" ]] && [[ -f "$REQ_FULL" ]]; then
   echo "[INFO] requirements.min.txt missing; copying from requirements.txt"
-  cp "$REQ_FULL" "$REQ_MIN"
+  grep -v -E '^decord(==|$)' "$REQ_FULL" > "$REQ_MIN"
 fi
 
 REQ_VISION_AARCH64="$ROOT_DIR/OmniServe/encoder/vision/track_b/requirements.aarch64.txt"
 REQ_VISION_FULL="$ROOT_DIR/OmniServe/encoder/vision/track_b/requirements.txt"
 if [[ ! -f "$REQ_VISION_AARCH64" ]] && [[ -f "$REQ_VISION_FULL" ]]; then
   echo "[INFO] requirements.aarch64.txt missing; copying from requirements.txt"
-  cp "$REQ_VISION_FULL" "$REQ_VISION_AARCH64"
+  grep -v -E '^decord(==|$)' "$REQ_VISION_FULL" > "$REQ_VISION_AARCH64"
 fi
 
 # Download model if missing
