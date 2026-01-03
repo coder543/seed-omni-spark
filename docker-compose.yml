@@ -227,7 +227,7 @@ services:
       - "${OMNI_PORT:-10032}:10032"
     volumes:
       - ./OmniServe/omni_chainer/tests/chat_template/track_b/chat_template.jinja:/vllm-workspace/chat_template.jinja:ro
-      - ${OMNI_MODEL_PATH:-models/track_b/llm/HyperCLOVAX-SEED-Omni-8B}:/vllm-workspace/llm/model:ro
+      - ${OMNI_MODEL_PATH:-models/track_b/llm}:/vllm-workspace/llm/model:ro
     ipc: host
     shm_size: '16gb'
     restart: unless-stopped

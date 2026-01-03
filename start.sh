@@ -13,7 +13,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 MODEL_ROOT="${MODEL_ROOT:-$ROOT_DIR/models}"
 TRACK_B_DIR="$MODEL_ROOT/track_b"
 
-LLM_DIR="$TRACK_B_DIR/llm/HyperCLOVAX-SEED-Omni-8B"
+LLM_DIR="$TRACK_B_DIR/llm"
 VE_DIR="$TRACK_B_DIR/ve"
 VD_DIR="$TRACK_B_DIR/vd"
 AE_DIR="$TRACK_B_DIR/ae"
@@ -61,7 +61,7 @@ fi
 # Convert if needed
 if [[ ! -d "$VE_DIR" ]] || [[ ! -d "$VD_DIR" ]] || [[ ! -d "$AE_DIR" ]] || [[ ! -d "$AD_DIR" ]]; then
   echo "[INFO] Converted components missing. Running conversion..."
-  "$ROOT_DIR/scripts/convert_model.sh" "$TRACK_B_DIR"
+  "$ROOT_DIR/scripts/convert_model.sh" "$TRACK_B_DIR/llm" "$TRACK_B_DIR"
 fi
 
 # Ensure env

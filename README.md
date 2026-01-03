@@ -77,7 +77,7 @@ Download and convert:
 This produces:
 
 ```
-/path/to/models/track_b/llm/HyperCLOVAX-SEED-Omni-8B
+/path/to/models/track_b/llm
 /path/to/models/track_b/ve
 /path/to/models/track_b/vd
 /path/to/models/track_b/ae
@@ -98,7 +98,7 @@ Common overrides:
 
 ```
 # Model paths (defaults are under ./models)
-OMNI_MODEL_PATH=./models/track_b/llm/HyperCLOVAX-SEED-Omni-8B
+OMNI_MODEL_PATH=./models/track_b/llm
 OMNI_ENCODER_AUDIO_MODEL_PATH=./models/track_b/ae
 OMNI_ENCODER_VISION_MODEL_PATH=./models/track_b/ve
 OMNI_DECODER_VISION_MODEL_PATH=./models/track_b/vd
