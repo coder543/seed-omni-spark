@@ -685,7 +685,10 @@ class ChatStore {
 						const idx = conversationsStore.findMessageIndex(assistantMessage.id);
 						conversationsStore.updateMessageAtIndex(idx, { toolCalls: streamedToolCallContent });
 						if (chunk.includes('"t2i_model_generation"')) {
-							this.setAttachmentProcessingMessage(assistantMessage.convId, 'Rendering image...');
+							this.setAttachmentProcessingMessage(
+								assistantMessage.convId,
+								'Receiving image tokens: 0'
+							);
 						}
 					},
 					onAudioChunk: (base64Data: string, mimeType?: string) => {
@@ -707,6 +710,13 @@ class ChatStore {
 								`Decoding audio: ${decodedCount}/${receivedCount} tokens`
 							);
 						}
+					},
+					onImageProgress: (received?: number) => {
+						if (!received) return;
+						this.setAttachmentProcessingMessage(
+							assistantMessage.convId,
+							`Receiving image tokens: ${received}`
+						);
 					},
 				onModel: (modelName: string) => recordModel(modelName),
 				onTimings: (timings?: ChatMessageTimings, promptProgress?: ChatMessagePromptProgress) => {

@@ -28,6 +28,7 @@ const AUDIO_TOKEN_CHUNK_SIZE = Number(process.env.AUDIO_TOKEN_CHUNK_SIZE || 150)
 const AUDIO_STREAMING_MAX_BASE64 = Number(process.env.AUDIO_STREAMING_MAX_BASE64 || 400000);
 const AUDIO_PROGRESS_INTERVAL = Number(process.env.AUDIO_PROGRESS_INTERVAL || 10);
 const AUDIO_TOKEN_LOG = process.env.AUDIO_TOKEN_LOG === '1';
+const IMAGE_PROGRESS_INTERVAL = Number(process.env.IMAGE_PROGRESS_INTERVAL || 50);
 const VISION_DECODER_ENDPOINT =
   process.env.VISION_DECODER_ENDPOINT || 'http://omni-decoder-vision-api:10063/decode';
 const S3_ENDPOINT = process.env.NCP_S3_ENDPOINT;
@@ -372,10 +373,16 @@ async function streamSseWithTransform(upstream, res, options = {}) {
   let audioTokensDecoded = 0;
   let audioProgressLastSent = 0;
   let deferFinalFlush = false;
+  let imageTokensReceived = 0;
+  let imageProgressLastSent = 0;
   const audioChunkSize =
     Number.isFinite(AUDIO_TOKEN_CHUNK_SIZE) && AUDIO_TOKEN_CHUNK_SIZE > 0
       ? AUDIO_TOKEN_CHUNK_SIZE
       : 150;
+  const imageProgressInterval =
+    Number.isFinite(IMAGE_PROGRESS_INTERVAL) && IMAGE_PROGRESS_INTERVAL > 0
+      ? IMAGE_PROGRESS_INTERVAL
+      : 10;
 
   const emitAudioProgress = () => {
     const payload = {
@@ -390,6 +397,34 @@ async function streamSseWithTransform(upstream, res, options = {}) {
       }
     };
     res.write(`data: ${JSON.stringify(payload)}\n\n`);
+  };
+
+  const emitImageProgress = () => {
+    if (imageTokensReceived <= 0) return;
+    const payload = {
+      id: meta.id || `chatcmpl-${crypto.randomUUID().replace(/-/g, '')}`,
+      object: 'chat.completion.chunk',
+      created: meta.created || Math.floor(Date.now() / 1000),
+      model: meta.model || 'track_b_model',
+      choices: [{ index: 0, delta: {} }],
+      image_progress: {
+        received: imageTokensReceived
+      }
+    };
+    res.write(`data: ${JSON.stringify(payload)}\n\n`);
+  };
+
+  const countVisionTokensInToolCalls = (calls) => {
+    if (!Array.isArray(calls)) return 0;
+    let total = 0;
+    for (const call of calls) {
+      if (call?.function?.name !== 't2i_model_generation') continue;
+      const args = call?.function?.arguments;
+      if (typeof args !== 'string') continue;
+      const matches = args.match(/<\\|vision/g);
+      if (matches) total += matches.length;
+    }
+    return total;
   };
 
   const debugAudioTokens = (label, tokens) => {
@@ -676,6 +711,15 @@ async function streamSseWithTransform(upstream, res, options = {}) {
               toolCalls = mergeToolCalls(toolCalls, delta.tool_calls);
               if (IMAGE_DEBUG) {
                 console.log('[image] stream tool_call delta', JSON.stringify(delta.tool_calls));
+              }
+              const currentImageTokens = countVisionTokensInToolCalls(toolCalls);
+              if (
+                currentImageTokens > imageTokensReceived &&
+                currentImageTokens - imageProgressLastSent >= imageProgressInterval
+              ) {
+                imageTokensReceived = currentImageTokens;
+                imageProgressLastSent = currentImageTokens;
+                emitImageProgress();
               }
             }
             if (delta?.audio) {

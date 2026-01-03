@@ -63,6 +63,7 @@ export class ChatService {
 			onToolCallChunk,
 			onAudioChunk,
 			onAudioProgress,
+			onImageProgress,
 			onModel,
 			onTimings,
 			// Generation parameters
@@ -379,7 +380,11 @@ export class ChatService {
 							const audioFormat = parsed.choices[0]?.delta?.audio?.format;
 							const audioProgress = (parsed as ApiChatCompletionStreamChunk & {
 								audio_progress?: { received?: number; decoded?: number };
+								image_progress?: { received?: number };
 							}).audio_progress;
+							const imageProgress = (parsed as ApiChatCompletionStreamChunk & {
+								image_progress?: { received?: number };
+							}).image_progress;
 							const timings = parsed.timings;
 							const promptProgress = parsed.prompt_progress;
 
@@ -400,6 +405,9 @@ export class ChatService {
 
 							if (audioProgress) {
 								onAudioProgress?.(audioProgress.received, audioProgress.decoded);
+							}
+							if (imageProgress) {
+								onImageProgress?.(imageProgress.received);
 							}
 
 							if (content) {
