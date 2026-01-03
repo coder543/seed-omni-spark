@@ -49,7 +49,7 @@ if [[ -z "$IMG_URL" ]]; then
 fi
 
 if [[ "$IMG_URL" == "<|discrete_image_start|>"* ]]; then
-  DECODE_PAYLOAD=$(jq -n --arg vlm_output "$IMG_URL" '{vlm_output: $vlm_output}')
+  DECODE_PAYLOAD=$(jq -n --arg vlm_output "$IMG_URL" '{vlm_output: $vlm_output, num_inference_steps: 10}')
   curl -sS -m 600 "$DECODER_URL" \
     -H 'Content-Type: application/json' \
     -d "$DECODE_PAYLOAD" > /tmp/t2i_decode.json
