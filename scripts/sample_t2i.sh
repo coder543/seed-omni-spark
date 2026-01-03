@@ -12,22 +12,8 @@ cat > /tmp/t2i_payload.json <<'JSON'
 {
   "model": "track_b_model",
   "messages": [
-    {"role": "system", "content": "You must generate images by calling the tool. Respond ONLY with a tool call in this exact XML format:\n<tool_call>t2i_model_generation\n<arg_key>discrete_image_token</arg_key>\n<arg_value><|discrete_image_start|>...<|discrete_image_end|></arg_value>\n</tool_call>"},
+    {"role": "system", "content": "Return ONLY the discrete image token string. It must start with <|discrete_image_start|> and end with <|discrete_image_end|>. Do not include any other text."},
     {"role": "user", "content": "Draw a picture of a sunset over mountains"}
-  ],
-  "tools": [
-    {
-      "type": "function",
-      "function": {
-        "name": "t2i_model_generation",
-        "description": "Generates an image.",
-        "parameters": {
-          "type": "object",
-          "required": ["discrete_image_token"],
-          "properties": {"discrete_image_token": {"type": "string"}}
-        }
-      }
-    }
   ],
   "max_tokens": 7000,
   "temperature": 0.7,
@@ -40,26 +26,42 @@ curl -sS -m 300 "${BASE_URL}/chat/completions" \
   -H 'Content-Type: application/json' \
   -d @/tmp/t2i_payload.json > /tmp/t2i_resp.json
 
-IMG_URL=$(jq -r '.choices[0].message.tool_calls[0].function.arguments' /tmp/t2i_resp.json | jq -r '.discrete_image_token // empty')
+RAW_CONTENT=$(jq -r '.choices[0].message.content // empty' /tmp/t2i_resp.json)
+IMG_URL="$RAW_CONTENT"
 
 if [[ -z "$IMG_URL" ]]; then
-  echo "No image URL returned. Response:" >&2
+  echo "No image tokens returned. Response:" >&2
   cat /tmp/t2i_resp.json >&2
   exit 1
 fi
 
-if [[ "$IMG_URL" == "<|discrete_image_start|>"* ]]; then
-  DECODE_PAYLOAD=$(jq -n --arg vlm_output "$IMG_URL" '{vlm_output: $vlm_output, num_inference_steps: 1, height: 256, width: 256}')
-  curl -sS -m 600 "$DECODER_URL" \
-    -H 'Content-Type: application/json' \
-    -d "$DECODE_PAYLOAD" > /tmp/t2i_decode.json
+IMG_TOKENS=$(
+  IMG_URL="$IMG_URL" python3 - <<'PY'
+import os, re, sys
+content = os.environ.get("IMG_URL", "")
+match = re.search(r"<\\|discrete_image_start\\|>.*?<\\|discrete_image_end\\|>", content, re.S)
+if not match:
+    sys.exit(1)
+print(match.group(0), end="")
+PY
+)
 
-  IMG_URL=$(jq -r '.presigned_url // empty' /tmp/t2i_decode.json)
-  if [[ -z "$IMG_URL" ]]; then
-    echo "Vision decoder did not return a URL. Response:" >&2
-    cat /tmp/t2i_decode.json >&2
-    exit 1
-  fi
+if [[ -z "$IMG_TOKENS" ]]; then
+  echo "No discrete image token block found. Response:" >&2
+  cat /tmp/t2i_resp.json >&2
+  exit 1
+fi
+
+DECODE_PAYLOAD=$(jq -n --arg vlm_output "$IMG_TOKENS" '{vlm_output: $vlm_output, num_inference_steps: 1, height: 256, width: 256}')
+curl -sS -m 600 "$DECODER_URL" \
+  -H 'Content-Type: application/json' \
+  -d "$DECODE_PAYLOAD" > /tmp/t2i_decode.json
+
+IMG_URL=$(jq -r '.presigned_url // empty' /tmp/t2i_decode.json)
+if [[ -z "$IMG_URL" ]]; then
+  echo "Vision decoder did not return a URL. Response:" >&2
+  cat /tmp/t2i_decode.json >&2
+  exit 1
 fi
 
 IMG_URL_LOCAL=$(echo "$IMG_URL" | sed 's|http://minio:9000|http://localhost:9000|')
