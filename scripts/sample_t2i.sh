@@ -4,6 +4,7 @@ set -euo pipefail
 BASE_URL="${1:-http://localhost:8000/b/v1}"
 OUT_DIR="${2:-./samples}"
 OUT_FILE="${3:-omni_image.png}"
+DECODER_URL="${4:-http://localhost:10063/decode}"
 
 mkdir -p "$OUT_DIR"
 
@@ -45,6 +46,20 @@ if [[ -z "$IMG_URL" ]]; then
   echo "No image URL returned. Response:" >&2
   cat /tmp/t2i_resp.json >&2
   exit 1
+fi
+
+if [[ "$IMG_URL" == "<|discrete_image_start|>"* ]]; then
+  DECODE_PAYLOAD=$(jq -n --arg vlm_output "$IMG_URL" '{vlm_output: $vlm_output}')
+  curl -sS -m 600 "$DECODER_URL" \
+    -H 'Content-Type: application/json' \
+    -d "$DECODE_PAYLOAD" > /tmp/t2i_decode.json
+
+  IMG_URL=$(jq -r '.presigned_url // empty' /tmp/t2i_decode.json)
+  if [[ -z "$IMG_URL" ]]; then
+    echo "Vision decoder did not return a URL. Response:" >&2
+    cat /tmp/t2i_decode.json >&2
+    exit 1
+  fi
 fi
 
 IMG_URL_LOCAL=$(echo "$IMG_URL" | sed 's|http://minio:9000|http://localhost:9000|')
