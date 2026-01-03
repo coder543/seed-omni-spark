@@ -1,14 +1,22 @@
 import express from 'express';
 import { createProxyMiddleware } from 'http-proxy-middleware';
 import path from 'path';
+import fs from 'fs';
+import crypto from 'crypto';
 import { Readable } from 'stream';
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 const OMNI_BASE = process.env.OMNI_BASE || 'http://omni-chainer:8000';
 const PUBLIC_DIR = process.env.PUBLIC_DIR || path.resolve('/app/public');
+const INTERNAL_BASE = process.env.PROXY_INTERNAL_BASE || 'http://seed-omni-webui:3000';
+const UPLOAD_DIR = process.env.UPLOAD_DIR || path.resolve('/app/uploads');
 const MODEL_ID = 'naver-hyperclovax/HyperCLOVAX-SEED-Omni-8B';
 const OMNI_MODEL_ID = 'track_b_model';
+
+if (!fs.existsSync(UPLOAD_DIR)) {
+  fs.mkdirSync(UPLOAD_DIR, { recursive: true });
+}
 
 // Minimal /props response to satisfy webui
 app.get('/props', (_req, res) => {
@@ -99,7 +107,8 @@ app.get('/v1/models', (_req, res) => {
         id: MODEL_ID,
         object: 'model',
         owned_by: 'omniserv',
-        permission: []
+        permission: [],
+        modalities: { vision: true, audio: true }
       }
     ]
   });
@@ -115,6 +124,25 @@ app.post('/v1/chat/completions', express.json({ limit: '50mb' }), async (req, re
     // OmniServe does not accept max_tokens=-1; omit to mean "no limit".
     if (body.max_tokens === -1 || body.max_tokens === 0) {
       delete body.max_tokens;
+    }
+
+    // Convert data: URLs into hosted files so OmniServe can fetch them.
+    if (Array.isArray(body.messages)) {
+      for (const msg of body.messages) {
+        if (!Array.isArray(msg?.content)) continue;
+        for (const part of msg.content) {
+          if (part?.type === 'image_url' && part?.image_url?.url?.startsWith('data:')) {
+            const { url, mime } = writeDataUrl(part.image_url.url);
+            part.image_url.url = url;
+            part.image_url.mime_type = mime;
+          }
+          if (part?.type === 'audio_url' && part?.audio_url?.url?.startsWith('data:')) {
+            const { url, mime } = writeDataUrl(part.audio_url.url);
+            part.audio_url.url = url;
+            part.audio_url.mime_type = mime;
+          }
+        }
+      }
     }
     const upstream = await fetch(`${OMNI_BASE}/b/v1/chat/completions`, {
       method: 'POST',
@@ -165,9 +193,36 @@ app.use(
 
 // Serve static UI
 app.use(express.static(PUBLIC_DIR));
+app.use('/uploads', express.static(UPLOAD_DIR));
 app.get('*', (_req, res) => {
   res.sendFile(path.join(PUBLIC_DIR, 'index.html'));
 });
+
+function writeDataUrl(dataUrl) {
+  const match = /^data:([^;]+);base64,(.*)$/.exec(dataUrl);
+  if (!match) {
+    throw new Error('Invalid data URL');
+  }
+  const mime = match[1];
+  const b64 = match[2];
+  const buf = Buffer.from(b64, 'base64');
+  const ext = mimeToExt(mime);
+  const id = crypto.randomUUID();
+  const filename = `${id}.${ext}`;
+  fs.writeFileSync(path.join(UPLOAD_DIR, filename), buf);
+  return { url: `${INTERNAL_BASE}/uploads/${filename}`, mime };
+}
+
+function mimeToExt(mime) {
+  if (mime === 'image/png') return 'png';
+  if (mime === 'image/jpeg') return 'jpg';
+  if (mime === 'image/webp') return 'webp';
+  if (mime === 'image/gif') return 'gif';
+  if (mime === 'audio/wav') return 'wav';
+  if (mime === 'audio/mpeg') return 'mp3';
+  if (mime === 'audio/webm') return 'webm';
+  return 'bin';
+}
 
 app.listen(PORT, () => {
   // eslint-disable-next-line no-console
