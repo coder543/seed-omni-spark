@@ -43,10 +43,16 @@ Apply our OmniServe patch:
 
 ### One-shot run
 
-If you want a single command that handles submodules, patching, model download/convert, and Compose:
+If you want a single command that handles submodules, patching, model download/convert, venv setup, and Compose:
 
 ```bash
 ./run.sh
+```
+
+You can override the model location (default is `./models`):
+
+```bash
+MODEL_ROOT=/path/to/models ./run.sh
 ```
 
 ---

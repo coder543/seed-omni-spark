@@ -9,7 +9,12 @@ fi
 IN_DIR="$1"
 OUT_DIR="$2"
 
-python3 ./OmniServe/convert_model.py \
+PYTHON_BIN="python3"
+if [[ -x "./.venv/bin/python" ]]; then
+  PYTHON_BIN="./.venv/bin/python"
+fi
+
+$PYTHON_BIN ./OmniServe/convert_model.py \
   --input "$IN_DIR" \
   --output "$OUT_DIR" \
   --track b

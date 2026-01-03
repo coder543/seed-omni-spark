@@ -29,6 +29,15 @@ else
   git submodule update --init --recursive
 fi
 
+# Ensure local venv with required tools
+if [[ ! -d "$ROOT_DIR/.venv" ]]; then
+  echo "[INFO] Creating .venv ..."
+  python3 -m venv "$ROOT_DIR/.venv"
+fi
+
+echo "[INFO] Ensuring Python deps (huggingface_hub, torch, safetensors, openai, easydict) ..."
+if ! "$ROOT_DIR/.venv/bin/python" - <<'PY' >/dev/null 2>&1\nimport huggingface_hub, safetensors, torch, openai, easydict\nPY\nthen\n+  "$ROOT_DIR/.venv/bin/python" -m pip install --upgrade pip >/dev/null\n+  "$ROOT_DIR/.venv/bin/pip" install -q huggingface_hub safetensors torch openai easydict\n+fi
+
 # Apply patch (idempotent-ish)
 if [[ -f "$ROOT_DIR/patches/omniserv.clean.patch" ]]; then
   echo "[INFO] Applying OmniServe patch..."
