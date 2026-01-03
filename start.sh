@@ -5,6 +5,7 @@ set -euo pipefail
 # - Initializes submodule + applies patch
 # - Downloads + converts model if needed
 # - Builds and launches Docker Compose
+# - Streams logs and waits for health
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
@@ -93,5 +94,35 @@ docker compose -f docker-compose.track-b.yaml build
 
 docker compose -f docker-compose.track-b.yaml up -d
 
-echo "[INFO] OmniServe is starting. Tail logs with:"
-echo "  docker compose -f docker-compose.track-b.yaml logs -f omni"
+echo "[INFO] Streaming logs until healthy..."
+(
+  docker compose -f docker-compose.track-b.yaml logs -f omni &
+  echo $! > /tmp/seed_omni_logs.pid
+)
+
+# Wait for health
+READY=0
+for i in $(seq 1 180); do
+  if curl -fsS http://localhost:10032/health >/dev/null 2>&1 && \
+     curl -fsS http://localhost:8000/health >/dev/null 2>&1; then
+    READY=1
+    break
+  fi
+  sleep 5
+  if (( i % 12 == 0 )); then
+    echo "[INFO] Waiting for OmniServe to become healthy..."
+  fi
+done
+
+if [[ -f /tmp/seed_omni_logs.pid ]]; then
+  kill "$(cat /tmp/seed_omni_logs.pid)" >/dev/null 2>&1 || true
+  rm -f /tmp/seed_omni_logs.pid
+fi
+
+if [[ "$READY" -eq 1 ]]; then
+  echo "[INFO] OmniServe is healthy."
+  echo "[INFO] Test chat: ./scripts/test_chat.sh"
+else
+  echo "[WARN] Timed out waiting for health. Check logs:"
+  echo "  docker compose -f docker-compose.track-b.yaml logs -f omni"
+fi
