@@ -231,6 +231,7 @@ If you want to regenerate the patch later:
 - **LLM endpoint not reachable**: wait for `omni` container to finish loading (health will move to `healthy`).
 - **Image generation returns no tool call**: use `scripts/sample_t2i.sh` (strict system prompt).
 - **Audio generation fails**: ensure MinIO is running and reachable on `http://localhost:9000`.
+- **OmniServe submodule looks dirty**: this is expected after `./start.sh` because we apply `patches/omniserv.clean.patch`.
 
 ---
 
