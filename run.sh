@@ -36,7 +36,13 @@ if [[ ! -d "$ROOT_DIR/.venv" ]]; then
 fi
 
 echo "[INFO] Ensuring Python deps (huggingface_hub, torch, safetensors, openai, easydict) ..."
-if ! "$ROOT_DIR/.venv/bin/python" - <<'PY' >/dev/null 2>&1\nimport huggingface_hub, safetensors, torch, openai, easydict\nPY\nthen\n+  "$ROOT_DIR/.venv/bin/python" -m pip install --upgrade pip >/dev/null\n+  "$ROOT_DIR/.venv/bin/pip" install -q huggingface_hub safetensors torch openai easydict\n+fi
+if ! "$ROOT_DIR/.venv/bin/python" - <<'PY' >/dev/null 2>&1
+import huggingface_hub, safetensors, torch, openai, easydict
+PY
+then
+  "$ROOT_DIR/.venv/bin/python" -m pip install --upgrade pip >/dev/null
+  "$ROOT_DIR/.venv/bin/pip" install -q huggingface_hub safetensors torch openai easydict
+fi
 
 # Apply patch (idempotent-ish)
 if [[ -f "$ROOT_DIR/patches/omniserv.clean.patch" ]]; then
