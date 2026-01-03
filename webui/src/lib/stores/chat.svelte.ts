@@ -1790,7 +1790,11 @@ class ChatStore {
 		// Config options needed by ChatService
 		if (currentConfig.systemMessage) apiOptions.systemMessage = currentConfig.systemMessage;
 		if (currentConfig.disableReasoningFormat) apiOptions.disableReasoningFormat = true;
-		if (this.imageToolsEnabled) apiOptions.tools = IMAGE_GENERATION_TOOL_SCHEMA;
+		if (this.imageToolsEnabled) {
+			apiOptions.tools = IMAGE_GENERATION_TOOL_SCHEMA;
+			apiOptions.skip_special_tokens = false;
+			apiOptions.spaces_between_special_tokens = false;
+		}
 		apiOptions.extra_body = { chat_template_kwargs: { skip_reasoning: true } };
 
 		if (hasValue(currentConfig.temperature))

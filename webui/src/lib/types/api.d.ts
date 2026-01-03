@@ -188,7 +188,10 @@ export interface ApiChatCompletionRequest {
 	model?: string;
 	return_progress?: boolean;
 	tools?: unknown[];
+	tool_choice?: string | { type: string; function?: { name: string } };
 	extra_body?: Record<string, unknown>;
+	skip_special_tokens?: boolean;
+	spaces_between_special_tokens?: boolean;
 	// Reasoning parameters
 	reasoning_format?: string;
 	// Generation parameters

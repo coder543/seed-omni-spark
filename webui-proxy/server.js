@@ -29,6 +29,7 @@ const AUDIO_STREAMING_MAX_BASE64 = Number(process.env.AUDIO_STREAMING_MAX_BASE64
 const AUDIO_PROGRESS_INTERVAL = Number(process.env.AUDIO_PROGRESS_INTERVAL || 10);
 const AUDIO_TOKEN_LOG = process.env.AUDIO_TOKEN_LOG === '1';
 const IMAGE_PROGRESS_INTERVAL = Number(process.env.IMAGE_PROGRESS_INTERVAL || 50);
+const IMAGE_TRACE = process.env.IMAGE_TRACE === '1';
 const VISION_DECODER_ENDPOINT =
   process.env.VISION_DECODER_ENDPOINT || 'http://omni-decoder-vision-api:10063/decode';
 const S3_ENDPOINT = process.env.NCP_S3_ENDPOINT;
@@ -160,9 +161,26 @@ app.post('/v1/chat/completions', express.json({ limit: '50mb' }), async (req, re
   try {
     const body = req.body || {};
     if (IMAGE_DEBUG) {
+      const messages = Array.isArray(body.messages) ? body.messages : [];
+      const systemMessages = messages
+        .filter((msg) => msg?.role === 'system')
+        .map((msg) => (typeof msg.content === 'string' ? msg.content : ''));
+      const systemHint =
+        systemMessages.find((text) => text.includes('t2i_model_generation')) ||
+        systemMessages.find((text) => text.includes('generate images')) ||
+        '';
       console.log('[image] request', {
         stream: body.stream,
         hasTools: Array.isArray(body.tools) && body.tools.length > 0,
+        toolChoice: body.tool_choice,
+        toolNames: Array.isArray(body.tools)
+          ? body.tools
+              .map((tool) => tool?.function?.name || tool?.name || '')
+              .filter((name) => name)
+          : [],
+        messageCount: messages.length,
+        hasSystemPrompt: systemMessages.length > 0,
+        systemPromptHint: systemHint ? systemHint.slice(0, 80) : '',
         hasExtraBody: !!body.extra_body,
         skipReasoning: body?.extra_body?.chat_template_kwargs?.skip_reasoning === true
       });
@@ -320,7 +338,12 @@ async function transformSseToBase64(raw) {
     if (IMAGE_DEBUG) {
       console.log('[image] non-stream tool_calls collected', JSON.stringify(toolCalls));
     }
+    if (IMAGE_TRACE) {
+      console.log('[image-trace] non-stream tool_calls length', toolCalls.length);
+    }
     await resolveVisionToolCalls(toolCalls);
+  } else if (IMAGE_TRACE) {
+    console.log('[image-trace] non-stream no tool_calls');
   }
   const transformed = await transformCompletionToBase64(payload);
   return `data: ${JSON.stringify({
@@ -595,7 +618,12 @@ async function streamSseWithTransform(upstream, res, options = {}) {
       if (IMAGE_DEBUG) {
         console.log('[image] stream tool_calls collected', JSON.stringify(toolCalls));
       }
+      if (IMAGE_TRACE) {
+        console.log('[image-trace] stream tool_calls collected', toolCalls.length);
+      }
       await resolveVisionToolCalls(toolCalls);
+    } else if (IMAGE_TRACE) {
+      console.log('[image-trace] stream no tool_calls to resolve');
     }
     const payload = {
       id: meta.id || `chatcmpl-${crypto.randomUUID().replace(/-/g, '')}`,
@@ -622,12 +650,18 @@ async function streamSseWithTransform(upstream, res, options = {}) {
     if (IMAGE_DEBUG && delta.tool_calls) {
       console.log('[image] stream tool_calls final', JSON.stringify(delta.tool_calls));
     }
-      if (!delta.tool_calls && !delta.audio) return;
-      const chunk = {
-        id: transformed.id,
-        object: 'chat.completion.chunk',
-        created: transformed.created,
-        model: transformed.model,
+    if (IMAGE_TRACE) {
+      console.log('[image-trace] stream final delta', {
+        hasToolCalls: Boolean(delta.tool_calls),
+        hasAudio: Boolean(delta.audio)
+      });
+    }
+    if (!delta.tool_calls && !delta.audio) return;
+    const chunk = {
+      id: transformed.id,
+      object: 'chat.completion.chunk',
+      created: transformed.created,
+      model: transformed.model,
       choices: [{ index: 0, delta }]
     };
     res.write(`data: ${JSON.stringify(chunk)}\n\n`);
@@ -711,6 +745,20 @@ async function streamSseWithTransform(upstream, res, options = {}) {
               toolCalls = mergeToolCalls(toolCalls, delta.tool_calls);
               if (IMAGE_DEBUG) {
                 console.log('[image] stream tool_call delta', JSON.stringify(delta.tool_calls));
+              }
+              if (IMAGE_TRACE) {
+                const summaries = delta.tool_calls.map((call) => ({
+                  index: call?.index,
+                  id: call?.id,
+                  name: call?.function?.name,
+                  argsType: typeof call?.function?.arguments,
+                  argsLen:
+                    typeof call?.function?.arguments === 'string'
+                      ? call.function.arguments.length
+                      : JSON.stringify(call?.function?.arguments || '').length
+                }));
+                console.log('[image-trace] stream tool_calls delta', summaries);
+                console.log('[image-trace] stream tool_calls length', toolCalls.length);
               }
               const currentImageTokens = countVisionTokensInToolCalls(toolCalls);
               if (
@@ -933,9 +981,10 @@ async function transformCompletionToBase64(data) {
         }
         const dataUrl = await fetchAsDataUrl(token);
         if (dataUrl) {
-          args.discrete_image_token = dataUrl;
+          const normalized = normalizeImageDataUrl(dataUrl) || dataUrl;
+          args.discrete_image_token = normalized;
           call.function.arguments = JSON.stringify(args);
-          if (IMAGE_DEBUG) console.log('[image] fetched data url (non-stream)', dataUrl.slice(0, 80));
+          if (IMAGE_DEBUG) console.log('[image] fetched data url (non-stream)', normalized.slice(0, 80));
         }
       }
     }
@@ -1088,17 +1137,27 @@ function mergeToolCalls(existing, deltas) {
   for (const delta of deltas || []) {
     const index = delta.index ?? 0;
     if (!result[index]) result[index] = {};
-    result[index] = {
-      ...result[index],
-      ...delta,
-      function: {
-        ...(result[index].function || {}),
-        ...(delta.function || {})
-      }
-    };
-    if (delta?.function?.arguments) {
+    const prevEntry = result[index];
+    const prevFn = prevEntry.function || {};
+    const nextFn = delta.function || {};
+    const nextArgs = Object.prototype.hasOwnProperty.call(nextFn, 'arguments')
+      ? nextFn.arguments
+      : undefined;
+    const mergedFn = { ...prevFn, ...nextFn };
+    if (nextFn.name == null && prevFn.name) {
+      mergedFn.name = prevFn.name;
+    }
+    // Avoid clobbering accumulated arguments with empty strings.
+    if (nextArgs === '') {
+      mergedFn.arguments = prevFn.arguments;
+    }
+    const mergedEntry = { ...prevEntry, ...delta, function: mergedFn };
+    if (delta.id == null && prevEntry.id) mergedEntry.id = prevEntry.id;
+    if (delta.type == null && prevEntry.type) mergedEntry.type = prevEntry.type;
+    result[index] = mergedEntry;
+    if (nextArgs) {
       const prev = result[index]?.function?.arguments || '';
-      const next = delta.function.arguments;
+      const next = nextArgs;
       if (typeof next === 'string' && next.trim().startsWith('{')) {
         result[index].function.arguments = next;
       } else {
@@ -1118,10 +1177,24 @@ async function resolveVisionToolCalls(toolCalls) {
     try {
       args = typeof argsRaw === 'string' ? JSON.parse(argsRaw) : argsRaw;
     } catch {
+      if (IMAGE_TRACE) {
+        console.log('[image-trace] tool call args parse failed', {
+          type: typeof argsRaw,
+          length: typeof argsRaw === 'string' ? argsRaw.length : undefined
+        });
+      }
       args = undefined;
     }
     const token = args?.discrete_image_token;
     if (typeof token !== 'string') continue;
+    if (IMAGE_TRACE) {
+      console.log('[image-trace] resolve tool call token', {
+        type: typeof token,
+        length: token.length,
+        startsWithData: token.trim().startsWith('data:'),
+        looksLikeVision: looksLikeVisionTokens(token)
+      });
+    }
     if (token.trim().startsWith('data:')) continue;
     if (!looksLikeVisionTokens(token)) continue;
     if (IMAGE_DEBUG) {
@@ -1130,14 +1203,19 @@ async function resolveVisionToolCalls(toolCalls) {
         preview: token.slice(0, 120)
       });
     }
+    if (IMAGE_TRACE) {
+      console.log('[image-trace] calling vision decoder', VISION_DECODER_ENDPOINT);
+    }
     const decoded = await decodeVisionTokensToUrl(token);
     if (!decoded) {
       if (IMAGE_DEBUG) console.log('[image] vision decode failed');
+      if (IMAGE_TRACE) console.log('[image-trace] vision decode failed');
       continue;
     }
     args.discrete_image_token = decoded;
     call.function.arguments = JSON.stringify(args);
-    if (IMAGE_DEBUG) console.log('[image] vision decode url', decoded);
+    if (IMAGE_DEBUG) console.log('[image] vision decode url', args.discrete_image_token);
+    if (IMAGE_TRACE) console.log('[image-trace] vision decode success', args.discrete_image_token);
   }
 }
 
@@ -1301,6 +1379,12 @@ function extractSpeakerId(content) {
 
 async function decodeVisionTokensToUrl(token) {
   try {
+    if (IMAGE_TRACE) {
+      console.log('[image-trace] vision decoder request', {
+        endpoint: VISION_DECODER_ENDPOINT,
+        tokenLength: token.length
+      });
+    }
     const resp = await fetch(VISION_DECODER_ENDPOINT, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
@@ -1315,10 +1399,34 @@ async function decodeVisionTokensToUrl(token) {
         s3_expiration: 3600
       })
     });
-    if (!resp.ok) return undefined;
+    if (IMAGE_TRACE) {
+      console.log('[image-trace] vision decoder response', {
+        ok: resp.ok,
+        status: resp.status,
+        contentType: resp.headers.get('content-type') || ''
+      });
+    }
+    if (!resp.ok) {
+      if (IMAGE_TRACE) {
+        const text = await resp.text();
+        console.log('[image-trace] vision decoder error body', {
+          length: text.length,
+          preview: text.slice(0, 200)
+        });
+      }
+      return undefined;
+    }
     const data = await resp.json();
+    if (IMAGE_TRACE) {
+      console.log('[image-trace] vision decoder payload', {
+        keys: data ? Object.keys(data) : [],
+        hasPresignedUrl: Boolean(data?.presigned_url),
+        hasS3Path: Boolean(data?.s3_path)
+      });
+    }
     return data?.presigned_url || data?.s3_path || undefined;
   } catch {
+    if (IMAGE_TRACE) console.log('[image-trace] vision decoder exception');
     return undefined;
   }
 }

@@ -20,6 +20,11 @@ export interface SettingsChatServiceOptions {
 	systemMessage?: string;
 	// Tools to include with the request
 	tools?: unknown[];
+	// Tool choice control (OpenAI-compatible)
+	tool_choice?: string | { type: string; function?: { name: string } };
+	// Token handling for multimodal outputs
+	skip_special_tokens?: boolean;
+	spaces_between_special_tokens?: boolean;
 	// Extra body for server-specific parameters
 	extra_body?: Record<string, unknown>;
 	// Disable reasoning format (use 'none' instead of 'auto')

@@ -91,6 +91,9 @@ export class ChatService {
 			samplers,
 			custom,
 			tools,
+			tool_choice,
+			skip_special_tokens,
+			spaces_between_special_tokens,
 			extra_body,
 			timings_per_token,
 			// Config options
@@ -117,11 +120,23 @@ export class ChatService {
 				return true;
 			});
 
+		const requestMessages: ApiChatMessageData[] = normalizedMessages.map((msg) => ({
+			role: msg.role,
+			content: msg.content
+		}));
+
+		if (options.systemMessage) {
+			const hasSystem = requestMessages.some((msg) => msg.role === 'system');
+			if (!hasSystem) {
+				requestMessages.unshift({
+					role: 'system',
+					content: options.systemMessage
+				});
+			}
+		}
+
 		const requestBody: ApiChatCompletionRequest = {
-			messages: normalizedMessages.map((msg: ApiChatMessageData) => ({
-				role: msg.role,
-				content: msg.content
-			})),
+			messages: requestMessages,
 			stream,
 			return_progress: stream ? true : undefined
 		};
@@ -134,6 +149,10 @@ export class ChatService {
 		if (tools !== undefined) {
 			requestBody.tools = tools;
 		}
+		if (tool_choice !== undefined) requestBody.tool_choice = tool_choice;
+		if (skip_special_tokens !== undefined) requestBody.skip_special_tokens = skip_special_tokens;
+		if (spaces_between_special_tokens !== undefined)
+			requestBody.spaces_between_special_tokens = spaces_between_special_tokens;
 		if (extra_body !== undefined) {
 			requestBody.extra_body = extra_body;
 		}
