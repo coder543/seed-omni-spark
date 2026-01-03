@@ -261,6 +261,22 @@ services:
     networks:
       - encoder-network
 
+  webui:
+    build:
+      context: .
+      dockerfile: webui-proxy/Dockerfile
+    image: seed-omni-webui:latest
+    container_name: seed-omni-webui
+    environment:
+      - OMNI_BASE=http://omni-chainer:8000
+      - PORT=3000
+    ports:
+      - "3000:3000"
+    depends_on:
+      - omni-chainer
+    networks:
+      - encoder-network
+
 volumes:
   torch-cache:
     driver: local

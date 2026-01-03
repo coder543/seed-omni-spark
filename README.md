@@ -136,6 +136,19 @@ curl http://localhost:8000/health
 curl http://localhost:10032/health
 ```
 
+## Web UI (Text-first)
+
+This repo includes a client-side WebUI (from llama.cpp) served by a lightweight Node proxy.
+It proxies OpenAI-compatible requests to OmniServe and serves static UI assets.
+
+Once the stack is up:
+
+```
+http://localhost:3000
+```
+
+Text chat works out of the box. Image/audio handling will be wired next.
+
 ---
 
 ## 6) Sample Outputs
