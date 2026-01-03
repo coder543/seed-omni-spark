@@ -61,6 +61,13 @@ if [[ ! -f "$REQ_MIN" ]] && [[ -f "$REQ_FULL" ]]; then
   cp "$REQ_FULL" "$REQ_MIN"
 fi
 
+REQ_VISION_AARCH64="$ROOT_DIR/OmniServe/encoder/vision/track_b/requirements.aarch64.txt"
+REQ_VISION_FULL="$ROOT_DIR/OmniServe/encoder/vision/track_b/requirements.txt"
+if [[ ! -f "$REQ_VISION_AARCH64" ]] && [[ -f "$REQ_VISION_FULL" ]]; then
+  echo "[INFO] requirements.aarch64.txt missing; copying from requirements.txt"
+  cp "$REQ_VISION_FULL" "$REQ_VISION_AARCH64"
+fi
+
 # Download model if missing
 if [[ ! -d "$RAW_LLM_DIR" ]]; then
   echo "[INFO] Raw model not found at $RAW_LLM_DIR"
