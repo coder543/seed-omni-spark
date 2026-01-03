@@ -7,7 +7,7 @@ __pycache__/
 .env
 
 # Model weights / conversions
-models/
+/models/
 
 # Temp
 .tmp_vllm_0.11.2.tar.gz
