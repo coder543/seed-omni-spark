@@ -14,7 +14,7 @@ if [[ ! -d "$SUBMODULE_DIR" ]]; then
   exit 1
 fi
 
-if command -v git >/dev/null 2>&1 && [[ -d "$SUBMODULE_DIR/.git" ]]; then
+if command -v git >/dev/null 2>&1 && [[ -e "$SUBMODULE_DIR/.git" ]]; then
   # Prefer git apply for clean, non-interactive behavior.
   if git -C "$SUBMODULE_DIR" apply --check "$PATCH_FILE" >/dev/null 2>&1; then
     git -C "$SUBMODULE_DIR" apply "$PATCH_FILE"

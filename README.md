@@ -117,14 +117,14 @@ NCP_S3_BUCKET_NAME=omni
 ## 4) Build & Run
 
 ```bash
-docker compose -f docker-compose.track-b.yaml build
-docker compose -f docker-compose.track-b.yaml up -d
+docker compose -f docker-compose.yml build
+docker compose -f docker-compose.yml up -d
 ```
 
 Follow logs during first boot (model loading can take a few minutes):
 
 ```bash
-docker compose -f docker-compose.track-b.yaml logs -f omni
+docker compose -f docker-compose.yml logs -f omni
 ```
 
 ---
@@ -192,7 +192,7 @@ The DGX Spark uses unified memory. vLLM still allocates GPU VRAM for KV cache, w
 - `--gpu-memory-utilization 0.35`
 - `--enforce-eager`
 
-These are set in `docker-compose.track-b.yaml` under the `omni` service. This keeps total GPU usage in a safe range while enabling text/image/audio generation.
+These are set in `docker-compose.yml` under the `omni` service. This keeps total GPU usage in a safe range while enabling text/image/audio generation.
 
 If you need more throughput and can tolerate higher memory usage, try:
 

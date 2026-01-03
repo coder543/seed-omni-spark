@@ -8,7 +8,7 @@ RESP=$(curl -sS "${BASE_URL}/chat/completions" \
   -d '{
     "model": "track_b_model",
     "messages": [
-      {"role": "user", "content": "Say hello from OmniServe."}
+      {"role": "user", "content": "Say hello from OmniServe in English."}
     ],
     "max_tokens": 64,
     "extra_body": {"chat_template_kwargs": {"skip_reasoning": true}}

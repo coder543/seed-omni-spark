@@ -1,3 +1,2 @@
+# Keep index.html and favicon for standalone static hosting.
 rm -rf ../public/_app;
-rm ../public/favicon.svg;
-rm ../public/index.html;

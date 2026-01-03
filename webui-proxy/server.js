@@ -1,11 +1,14 @@
 import express from 'express';
 import { createProxyMiddleware } from 'http-proxy-middleware';
 import path from 'path';
+import { Readable } from 'stream';
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 const OMNI_BASE = process.env.OMNI_BASE || 'http://omni-chainer:8000';
 const PUBLIC_DIR = process.env.PUBLIC_DIR || path.resolve('/app/public');
+const MODEL_ID = 'naver-hyperclovax/HyperCLOVAX-SEED-Omni-8B';
+const OMNI_MODEL_ID = 'track_b_model';
 
 // Minimal /props response to satisfy webui
 app.get('/props', (_req, res) => {
@@ -42,7 +45,7 @@ app.get('/props', (_req, res) => {
         mirostat_tau: 0,
         mirostat_eta: 0,
         stop: [],
-        max_tokens: 256,
+        max_tokens: -1,
         n_keep: 0,
         n_discard: 0,
         ignore_eos: false,
@@ -88,14 +91,64 @@ app.get('/props', (_req, res) => {
 });
 
 // Proxy OpenAI-compatible endpoints to OmniServe Track B
+app.get('/v1/models', (_req, res) => {
+  res.json({
+    object: 'list',
+    data: [
+      {
+        id: MODEL_ID,
+        object: 'model',
+        owned_by: 'omniserv',
+        permission: []
+      }
+    ]
+  });
+});
+
+// Handle chat completions directly to avoid proxy body issues.
+app.post('/v1/chat/completions', express.json({ limit: '50mb' }), async (req, res) => {
+  try {
+    const body = req.body || {};
+    if (body.model === MODEL_ID) {
+      body.model = OMNI_MODEL_ID;
+    }
+    // OmniServe does not accept max_tokens=-1; omit to mean "no limit".
+    if (body.max_tokens === -1 || body.max_tokens === 0) {
+      delete body.max_tokens;
+    }
+    const upstream = await fetch(`${OMNI_BASE}/b/v1/chat/completions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    });
+
+    res.status(upstream.status);
+    const contentType = upstream.headers.get('content-type') || 'application/json';
+    res.set('content-type', contentType);
+    if (contentType.includes('text/event-stream')) {
+      res.set('cache-control', 'no-cache');
+      res.set('connection', 'keep-alive');
+      res.flushHeaders();
+      const stream = Readable.fromWeb(upstream.body);
+      stream.pipe(res);
+      stream.on('error', () => res.end());
+      return;
+    }
+    const text = await upstream.text();
+    res.send(text);
+  } catch (err) {
+    res.status(502);
+    res.set('content-type', 'application/json');
+    res.send(JSON.stringify({ error: 'Upstream chat completion failed', detail: String(err) }));
+  }
+});
+
 app.use(
   '/v1',
   createProxyMiddleware({
     target: OMNI_BASE,
     changeOrigin: true,
-    pathRewrite: {
-      '^/v1': '/b/v1'
-    },
+    pathRewrite: (path) => `/b/v1${path}`,
     logLevel: 'warn'
   })
 );

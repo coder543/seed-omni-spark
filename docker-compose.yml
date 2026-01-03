@@ -1,4 +1,3 @@
-version: '3.8'
 services:
   minio:
     image: minio/minio:latest
@@ -269,9 +268,9 @@ services:
     container_name: seed-omni-webui
     environment:
       - OMNI_BASE=http://omni-chainer:8000
-      - PORT=3000
+      - PORT=${WEBUI_PORT:-3000}
     ports:
-      - "3000:3000"
+      - "${WEBUI_HOST:-0.0.0.0}:${WEBUI_PORT:-3000}:3000"
     depends_on:
       - omni-chainer
     networks:

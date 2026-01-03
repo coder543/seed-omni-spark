@@ -90,13 +90,13 @@ set_env AUDIO_DECODER_PATH "$AD_DIR"
 # Build + run
 cd "$ROOT_DIR"
 
-docker compose -f docker-compose.track-b.yaml build
+docker compose -f docker-compose.yml build
 
-docker compose -f docker-compose.track-b.yaml up -d
+docker compose -f docker-compose.yml up -d
 
 echo "[INFO] Streaming logs until healthy..."
 (
-  docker compose -f docker-compose.track-b.yaml logs -f omni &
+  docker compose -f docker-compose.yml logs -f omni &
   echo $! > /tmp/seed_omni_logs.pid
 )
 
@@ -124,5 +124,5 @@ if [[ "$READY" -eq 1 ]]; then
   echo "[INFO] (Suggestion) Test chat: ./scripts/test_chat.sh"
 else
   echo "[WARN] Timed out waiting for health. Check logs:"
-  echo "  docker compose -f docker-compose.track-b.yaml logs -f omni"
+  echo "  docker compose -f docker-compose.yml logs -f omni"
 fi

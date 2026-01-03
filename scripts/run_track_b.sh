@@ -1,4 +1,0 @@
-#!/usr/bin/env bash
-set -euo pipefail
-
-docker compose -f docker-compose.track-b.yaml up -d --build
