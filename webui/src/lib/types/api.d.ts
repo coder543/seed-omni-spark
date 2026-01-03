@@ -267,9 +267,6 @@ export interface ApiChatCompletionStreamChunk {
 		received?: number;
 		decoded?: number;
 	};
-	image_progress?: {
-		received?: number;
-	};
 }
 
 export interface ApiChatCompletionResponse {

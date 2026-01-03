@@ -28,7 +28,6 @@ const AUDIO_TOKEN_CHUNK_SIZE = Number(process.env.AUDIO_TOKEN_CHUNK_SIZE || 150)
 const AUDIO_STREAMING_MAX_BASE64 = Number(process.env.AUDIO_STREAMING_MAX_BASE64 || 400000);
 const AUDIO_PROGRESS_INTERVAL = Number(process.env.AUDIO_PROGRESS_INTERVAL || 10);
 const AUDIO_TOKEN_LOG = process.env.AUDIO_TOKEN_LOG === '1';
-const IMAGE_PROGRESS_INTERVAL = Number(process.env.IMAGE_PROGRESS_INTERVAL || 50);
 const IMAGE_TRACE = process.env.IMAGE_TRACE === '1';
 const VISION_DECODER_ENDPOINT =
   process.env.VISION_DECODER_ENDPOINT || 'http://omni-decoder-vision-api:10063/decode';
@@ -395,17 +394,13 @@ async function streamSseWithTransform(upstream, res, options = {}) {
   let audioTokensReceived = 0;
   let audioTokensDecoded = 0;
   let audioProgressLastSent = 0;
+  let xmlToolInProgress = false;
+  let xmlToolBuffer = '';
   let deferFinalFlush = false;
-  let imageTokensReceived = 0;
-  let imageProgressLastSent = 0;
   const audioChunkSize =
     Number.isFinite(AUDIO_TOKEN_CHUNK_SIZE) && AUDIO_TOKEN_CHUNK_SIZE > 0
       ? AUDIO_TOKEN_CHUNK_SIZE
       : 150;
-  const imageProgressInterval =
-    Number.isFinite(IMAGE_PROGRESS_INTERVAL) && IMAGE_PROGRESS_INTERVAL > 0
-      ? IMAGE_PROGRESS_INTERVAL
-      : 10;
 
   const emitAudioProgress = () => {
     const payload = {
@@ -422,32 +417,67 @@ async function streamSseWithTransform(upstream, res, options = {}) {
     res.write(`data: ${JSON.stringify(payload)}\n\n`);
   };
 
-  const emitImageProgress = () => {
-    if (imageTokensReceived <= 0) return;
-    const payload = {
-      id: meta.id || `chatcmpl-${crypto.randomUUID().replace(/-/g, '')}`,
-      object: 'chat.completion.chunk',
-      created: meta.created || Math.floor(Date.now() / 1000),
-      model: meta.model || 'track_b_model',
-      choices: [{ index: 0, delta: {} }],
-      image_progress: {
-        received: imageTokensReceived
-      }
-    };
-    res.write(`data: ${JSON.stringify(payload)}\n\n`);
+  const extractXmlToolCall = (xml) => {
+    const start = xml.indexOf('<tool_call>');
+    const end = xml.indexOf('</tool_call>');
+    if (start === -1 || end === -1 || end < start) return null;
+    const payload = xml.slice(start + '<tool_call>'.length, end).trim();
+    const lines = payload.split('\n').map((line) => line.trim());
+    const name = lines[0];
+    const argKeyMatch = payload.match(/<arg_key>([\s\S]*?)<\/arg_key>/);
+    const argValMatch = payload.match(/<arg_value>([\s\S]*?)<\/arg_value>/);
+    const argKey = argKeyMatch ? argKeyMatch[1].trim() : null;
+    const argVal = argValMatch ? argValMatch[1] : null;
+    if (!name || !argKey || argVal == null) return null;
+    return { name, args: { [argKey]: argVal } };
   };
 
-  const countVisionTokensInToolCalls = (calls) => {
-    if (!Array.isArray(calls)) return 0;
-    let total = 0;
-    for (const call of calls) {
-      if (call?.function?.name !== 't2i_model_generation') continue;
-      const args = call?.function?.arguments;
-      if (typeof args !== 'string') continue;
-      const matches = args.match(/<\\|vision/g);
-      if (matches) total += matches.length;
+  const processXmlToolCallContent = (content, parsed) => {
+    let remaining = content;
+    while (remaining.length > 0) {
+      if (!xmlToolInProgress) {
+        const startIdx = remaining.indexOf('<tool_call>');
+        if (startIdx === -1) {
+          return remaining;
+        }
+        const prefix = remaining.slice(0, startIdx);
+        if (prefix) {
+          const segments = splitThinkSegments(prefix);
+          if (segments.length > 0) emitSegments(parsed, segments);
+        }
+        xmlToolInProgress = true;
+        remaining = remaining.slice(startIdx);
+      }
+
+      xmlToolBuffer += remaining;
+      // Emit progress for any token-like markers in the new chunk.
+      const endIdx = xmlToolBuffer.indexOf('</tool_call>');
+      if (endIdx === -1) {
+        return '';
+      }
+      const fullXml = xmlToolBuffer.slice(0, endIdx + '</tool_call>'.length);
+      xmlToolBuffer = xmlToolBuffer.slice(endIdx + '</tool_call>'.length);
+      xmlToolInProgress = false;
+
+      const parsedTool = extractXmlToolCall(fullXml);
+      if (parsedTool?.name === 't2i_model_generation') {
+        toolCalls = mergeToolCalls(toolCalls, [
+          {
+            index: 0,
+            type: 'function',
+            id: `call_${crypto.randomUUID().replace(/-/g, '')}`,
+            function: {
+              name: parsedTool.name,
+              arguments: JSON.stringify(parsedTool.args)
+            }
+          }
+        ]);
+      }
+
+      remaining = xmlToolBuffer;
+      xmlToolBuffer = '';
     }
-    return total;
+    return '';
   };
 
   const debugAudioTokens = (label, tokens) => {
@@ -697,7 +727,11 @@ async function streamSseWithTransform(upstream, res, options = {}) {
             if (delta?.content) {
               fullContent += delta.content;
               if (!audioTokenDetected) {
-                const combined = prefixBuffer + delta.content;
+                const stripped = processXmlToolCallContent(delta.content, parsed);
+                if (!stripped) {
+                  continue;
+                }
+                const combined = prefixBuffer + stripped;
                 const audioIdx = combined.indexOf('<|audio');
                 if (audioIdx !== -1) {
                   audioTokenDetected = true;
@@ -759,15 +793,6 @@ async function streamSseWithTransform(upstream, res, options = {}) {
                 }));
                 console.log('[image-trace] stream tool_calls delta', summaries);
                 console.log('[image-trace] stream tool_calls length', toolCalls.length);
-              }
-              const currentImageTokens = countVisionTokensInToolCalls(toolCalls);
-              if (
-                currentImageTokens > imageTokensReceived &&
-                currentImageTokens - imageProgressLastSent >= imageProgressInterval
-              ) {
-                imageTokensReceived = currentImageTokens;
-                imageProgressLastSent = currentImageTokens;
-                emitImageProgress();
               }
             }
             if (delta?.audio) {

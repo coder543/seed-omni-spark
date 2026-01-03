@@ -711,13 +711,6 @@ class ChatStore {
 							);
 						}
 					},
-					onImageProgress: (received?: number) => {
-						if (!received) return;
-						this.setAttachmentProcessingMessage(
-							assistantMessage.convId,
-							`Receiving image tokens: ${received}`
-						);
-					},
 				onModel: (modelName: string) => recordModel(modelName),
 				onTimings: (timings?: ChatMessageTimings, promptProgress?: ChatMessagePromptProgress) => {
 					const tokensPerSecond =
