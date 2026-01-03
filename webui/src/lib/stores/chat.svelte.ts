@@ -72,6 +72,10 @@ class StreamingAudioPlayer {
 }
 
 const MAX_STREAMING_AUDIO_BASE64 = 400000;
+const IMAGE_GENERATION_SYSTEM_PROMPT =
+	'You are an AI assistant that generates images. When asked to draw or create an image, you MUST use the t2i_model_generation tool to generate the image. Always respond by calling the tool.';
+const IMAGE_TRANSFORM_SYSTEM_PROMPT =
+	'You are an AI assistant that transforms images. When asked to transform, edit, or stylize an image, you MUST use the t2i_model_generation tool to generate the new image. Always respond by calling the tool.';
 const IMAGE_GENERATION_TOOL_SCHEMA = [
 	{
 		type: 'function',
@@ -157,6 +161,34 @@ class ChatStore {
 	private addFilesHandler: ((files: File[]) => void) | null = $state(null);
 	private imageToolsEnabled = $state(false);
 	private attachmentStatusMessage = new SvelteMap<string, string>();
+
+	private messageHasImageExtras(extras?: DatabaseMessageExtra[]): boolean {
+		return (extras || []).some((extra) => {
+			if (extra.type === AttachmentType.IMAGE) return true;
+			if (extra.type === AttachmentType.PDF && extra.processedAsImages && extra.images?.length) {
+				return true;
+			}
+			return false;
+		});
+	}
+
+	private lastUserHasImage(messages: DatabaseMessage[]): boolean {
+		for (let i = messages.length - 1; i >= 0; i -= 1) {
+			const msg = messages[i];
+			if (msg.role !== 'user') continue;
+			return this.messageHasImageExtras(msg.extra);
+		}
+		return false;
+	}
+
+	private lastUserExtraTypes(messages: DatabaseMessage[]): string[] {
+		for (let i = messages.length - 1; i >= 0; i -= 1) {
+			const msg = messages[i];
+			if (msg.role !== 'user') continue;
+			return (msg.extra || []).map((extra) => extra.type);
+		}
+		return [];
+	}
 
 	// ─────────────────────────────────────────────────────────────────────────────
 	// Loading State
@@ -624,7 +656,8 @@ class ChatStore {
 		assistantMessage: DatabaseMessage,
 		onComplete?: (content: string) => Promise<void>,
 		onError?: (error: Error) => void,
-		modelOverride?: string | null
+		modelOverride?: string | null,
+		messageExtras?: DatabaseMessageExtra[]
 	): Promise<void> {
 		// Ensure model props are cached before streaming (for correct n_ctx in processing info)
 		if (isRouterMode()) {
@@ -662,11 +695,41 @@ class ChatStore {
 			const abortController = this.getOrCreateAbortController(assistantMessage.convId);
 			this.setAttachmentProcessingMessage(assistantMessage.convId, null);
 
-			await ChatService.sendMessage(
-			allMessages,
-			{
+			const apiOptions: Record<string, unknown> = {
 				...this.getApiOptions(),
-				...(modelOverride ? { model: modelOverride } : {}),
+				...(modelOverride ? { model: modelOverride } : {})
+			};
+
+			if (this.imageToolsEnabled) {
+				const hasImageInput =
+					this.messageHasImageExtras(messageExtras) || this.lastUserHasImage(allMessages);
+				console.log('[image] prompt select', {
+					hasImageInput,
+					messageExtrasTypes: (messageExtras || []).map((extra) => extra.type),
+					lastUserExtrasTypes: this.lastUserExtraTypes(allMessages)
+				});
+				if (hasImageInput) {
+					apiOptions.systemMessage = IMAGE_TRANSFORM_SYSTEM_PROMPT;
+				} else if (!apiOptions.systemMessage) {
+					apiOptions.systemMessage = IMAGE_GENERATION_SYSTEM_PROMPT;
+				}
+			}
+
+			const requestMessages = apiOptions.systemMessage
+				? allMessages.filter((msg) => msg.role !== 'system')
+				: allMessages;
+
+			console.log('[image] prompt final', {
+				hasSystemMessage: Boolean(apiOptions.systemMessage),
+				systemMessagePreview: apiOptions.systemMessage
+					? String(apiOptions.systemMessage).slice(0, 80)
+					: null
+			});
+
+			await ChatService.sendMessage(
+			requestMessages,
+			{
+				...apiOptions,
 				onChunk: (chunk: string) => {
 					streamedContent += chunk;
 					this.setChatStreaming(assistantMessage.convId, streamedContent, assistantMessage.id);
@@ -872,7 +935,11 @@ class ChatStore {
 			conversationsStore.addMessageToActive(assistantMessage);
 			await this.streamChatCompletion(
 				conversationsStore.activeMessages.slice(0, -1),
-				assistantMessage
+				assistantMessage,
+				undefined,
+				undefined,
+				undefined,
+				extras
 			);
 		} catch (error) {
 			if (this.isAbortError(error)) {

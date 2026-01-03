@@ -169,6 +169,7 @@ app.post('/v1/chat/completions', express.json({ limit: '50mb' }), async (req, re
         systemMessages.find((text) => text.includes('generate images')) ||
         '';
       console.log('[image] request', {
+        requestId: req.headers['x-seed-omni-request-id'] || null,
         stream: body.stream,
         hasTools: Array.isArray(body.tools) && body.tools.length > 0,
         toolChoice: body.tool_choice,

@@ -200,10 +200,28 @@ export class ChatService {
 			}
 		}
 
+		const requestId =
+			globalThis.crypto?.randomUUID?.() || `req_${Math.random().toString(36).slice(2, 12)}`;
+		const headers = {
+			...getJsonHeaders(),
+			'x-seed-omni-request-id': requestId
+		};
+
+		if (tools && Array.isArray(tools) && tools.length > 0) {
+			const systemMessages = requestBody.messages.filter((msg) => msg.role === 'system');
+			console.log('[image] sendMessage', {
+				requestId,
+				systemMessageCount: systemMessages.length,
+				systemMessagePreview: systemMessages[0]?.content
+					? String(systemMessages[0].content).slice(0, 80)
+					: null
+			});
+		}
+
 		try {
 			const response = await fetch(`./v1/chat/completions`, {
 				method: 'POST',
-				headers: getJsonHeaders(),
+				headers,
 				body: JSON.stringify(requestBody),
 				signal
 			});

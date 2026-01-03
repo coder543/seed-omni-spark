@@ -10,7 +10,7 @@
 	import * as Tooltip from '$lib/components/ui/tooltip';
 	import { FileTypeCategory } from '$lib/enums';
 	import { getFileTypeCategory } from '$lib/utils';
-	import { config, settingsStore } from '$lib/stores/settings.svelte';
+	import { config } from '$lib/stores/settings.svelte';
 	import { modelsStore, modelOptions, selectedModelId } from '$lib/stores/models.svelte';
 	import { isRouterMode } from '$lib/stores/server.svelte';
 	import { chatStore, imageToolsEnabled, setImageToolsEnabled } from '$lib/stores/chat.svelte';
@@ -45,10 +45,6 @@
 
 	let currentConfig = $derived(config());
 	let isRouter = $derived(isRouterMode());
-	const imageSystemPrompt =
-		'You are an AI assistant that generates images. When asked to draw or create an image, you MUST use the t2i_model_generation tool to generate the image. Always respond by calling the tool.';
-	let previousSystemPrompt = $state<string | null>(null);
-
 	let conversationModel = $derived(
 		chatStore.getConversationModel(activeMessages() as DatabaseMessage[])
 	);
@@ -154,22 +150,7 @@
 	let isImageModeActive = $derived(imageToolsEnabled());
 
 	function toggleImageMode() {
-		const currentPrompt = currentConfig.systemMessage?.toString() ?? '';
-
-		if (imageToolsEnabled()) {
-			settingsStore.updateMultipleConfig({
-				systemMessage: previousSystemPrompt ?? '',
-			});
-			setImageToolsEnabled(false);
-			previousSystemPrompt = null;
-			return;
-		}
-
-		previousSystemPrompt = currentPrompt;
-		settingsStore.updateMultipleConfig({
-			systemMessage: imageSystemPrompt
-		});
-		setImageToolsEnabled(true);
+		setImageToolsEnabled(!imageToolsEnabled());
 	}
 
 	let selectorModelRef: ModelsSelector | undefined = $state(undefined);
