@@ -243,6 +243,18 @@ If you want to regenerate the patch later:
 # diff -ruN OmniServe OmniServe.modified > patches/omniserv.clean.patch
 ```
 
+### Auto-refresh Patch on Commit
+
+We include a repo-local pre-commit hook that refreshes `patches/omniserv.clean.patch`
+whenever you commit. To enable it:
+
+```
+git config core.hooksPath .githooks
+```
+
+This will run `./scripts/refresh_omniserv_patch.sh` and stage the updated patch file
+automatically.
+
 ---
 
 ## Troubleshooting
