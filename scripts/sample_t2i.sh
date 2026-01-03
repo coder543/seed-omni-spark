@@ -29,6 +29,7 @@ cat > /tmp/t2i_payload.json <<'JSON'
       }
     }
   ],
+  "tool_choice": {"type": "function", "function": {"name": "t2i_model_generation"}},
   "max_tokens": 7000,
   "temperature": 0.7,
   "skip_special_tokens": false,
