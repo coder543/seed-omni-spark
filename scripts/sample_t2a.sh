@@ -15,7 +15,6 @@ cat > /tmp/t2a_payload.json <<'JSON'
     {"role": "user", "content": "Read this text aloud in a cheerful female voice:\nHello! How are you today?"}
   ],
   "max_tokens": 1000,
-  "skip_special_tokens": false,
   "chat_template_kwargs": {"skip_reasoning": true}
 }
 JSON
