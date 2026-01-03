@@ -77,6 +77,7 @@ Download and convert:
 This produces:
 
 ```
+/path/to/models/track_b/_raw/HyperCLOVAX-SEED-Omni-8B
 /path/to/models/track_b/llm/HyperCLOVAX-SEED-Omni-8B
 /path/to/models/track_b/ve
 /path/to/models/track_b/vd

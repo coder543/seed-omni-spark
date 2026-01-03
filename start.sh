@@ -13,6 +13,8 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 MODEL_ROOT="${MODEL_ROOT:-$ROOT_DIR/models}"
 TRACK_B_DIR="$MODEL_ROOT/track_b"
 
+RAW_DIR="$TRACK_B_DIR/_raw"
+RAW_LLM_DIR="$RAW_DIR/HyperCLOVAX-SEED-Omni-8B"
 LLM_DIR="$TRACK_B_DIR/llm/HyperCLOVAX-SEED-Omni-8B"
 VE_DIR="$TRACK_B_DIR/ve"
 VD_DIR="$TRACK_B_DIR/vd"
@@ -52,17 +54,17 @@ if [[ -f "$ROOT_DIR/patches/omniserv.clean.patch" ]]; then
 fi
 
 # Download model if missing
-if [[ ! -d "$LLM_DIR" ]]; then
-  echo "[INFO] Model not found at $LLM_DIR"
-  echo "[INFO] Downloading model to $LLM_DIR ..."
-  "$ROOT_DIR/scripts/download_model.sh" "$LLM_DIR"
+if [[ ! -d "$RAW_LLM_DIR" ]]; then
+  echo "[INFO] Raw model not found at $RAW_LLM_DIR"
+  echo "[INFO] Downloading model to $RAW_LLM_DIR ..."
+  "$ROOT_DIR/scripts/download_model.sh" "$RAW_LLM_DIR"
 fi
 
 # Convert if needed
 CONVERT_MARKER="$TRACK_B_DIR/.conversion_complete"
 if [[ ! -f "$CONVERT_MARKER" ]] || [[ ! -d "$VE_DIR" ]] || [[ ! -d "$VD_DIR" ]] || [[ ! -d "$AE_DIR" ]] || [[ ! -d "$AD_DIR" ]]; then
   echo "[INFO] Converted components missing. Running conversion..."
-  "$ROOT_DIR/scripts/convert_model.sh" "$LLM_DIR" "$TRACK_B_DIR"
+  "$ROOT_DIR/scripts/convert_model.sh" "$RAW_LLM_DIR" "$TRACK_B_DIR"
   touch "$CONVERT_MARKER"
 fi
 
