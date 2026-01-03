@@ -1,0 +1,272 @@
+version: '3.8'
+services:
+  minio:
+    image: minio/minio:latest
+    container_name: minio
+    command: ["server", "/data", "--console-address", ":9001"]
+    environment:
+      - MINIO_ROOT_USER=${MINIO_ROOT_USER}
+      - MINIO_ROOT_PASSWORD=${MINIO_ROOT_PASSWORD}
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio-data:/data
+    networks:
+      - encoder-network
+
+  minio-mc:
+    image: minio/mc:latest
+    container_name: minio-mc
+    depends_on:
+      - minio
+    entrypoint: ["/bin/sh", "-c"]
+    command: >
+      "until mc alias set local http://minio:9000 ${MINIO_ROOT_USER} ${MINIO_ROOT_PASSWORD}; do sleep 2; done;
+       mc mb -p local/${NCP_S3_BUCKET_NAME} || true;
+       mc anonymous set download local/${NCP_S3_BUCKET_NAME} || true;
+       tail -f /dev/null"
+    networks:
+      - encoder-network
+  omni-encoder-audio-api:
+    env_file:
+      - .env
+    build:
+      context: ./OmniServe
+      dockerfile: docker/omni_encoder_audio.dockerfile
+    image: omni-encoder-audio-api:latest
+    container_name: omni-encoder-audio-api
+    ports:
+      - "${OMNI_ENCODER_AUDIO_API_PORT:-10002}:8002"
+    volumes:
+      - ${OMNI_ENCODER_AUDIO_MODEL_PATH}:/workspace/app/model/weights:ro
+    environment:
+      - CONFIG_PATH=/workspace/config.json
+      - MODEL_ID=${OMNI_ENCODER_AUDIO_MODEL_ID}
+    ipc: host
+    shm_size: '16gb'
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ["0"]
+              capabilities: [gpu]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8002/docs"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 120s
+    networks:
+      - encoder-network
+
+  omni-encoder-vision-api:
+    env_file:
+      - .env
+    build:
+      context: ./OmniServe
+      dockerfile: docker/omni_encoder_vision.dockerfile
+    image: omni-encoder-vision-api:latest
+    container_name: omni-encoder-vision-api
+    ports:
+      - "${OMNI_ENCODER_VISION_API_PORT:-10064}:8000"
+    volumes:
+      - ${OMNI_ENCODER_VISION_MODEL_PATH}:/workspace/app/model/weights:ro
+    environment:
+      - CONFIG_PATH=/workspace/config.json
+      - MODEL_ID=${OMNI_ENCODER_VISION_MODEL_ID}
+    ipc: host
+    shm_size: '16gb'
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ["0"]
+              capabilities: [gpu]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/docs"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 120s
+    networks:
+      - encoder-network
+
+  omni-decoder-vision-api:
+    env_file:
+      - .env
+    build:
+      context: ./OmniServe
+      dockerfile: docker/omni_decoder_vision.dockerfile
+    image: omni-decoder-vision-api:latest
+    volumes:
+      - torch-cache:/app/.cache/torch
+      - ${OMNI_DECODER_VISION_MODEL_PATH}/scheduler:/app/track_b/scheduler:ro
+      - ${OMNI_DECODER_VISION_MODEL_PATH}/transformer:/app/track_b/transformer:ro
+      - ${OMNI_DECODER_VISION_MODEL_PATH}/transformer2:/app/track_b/transformer2:ro
+      - ${OMNI_DECODER_VISION_MODEL_PATH}/vae:/app/track_b/vae:ro
+      - ${OMNI_DECODER_VISION_MODEL_PATH}/token_embedder:/app/track_b/token_embedder:ro
+      - ${OMNI_DECODER_VISION_MODEL_PATH}/model_index.json:/app/track_b/model_index.json:ro
+    container_name: omni-decoder-vision-api
+    ports:
+      - "${OMNI_DECODER_VISION_API_PORT:-10063}:10063"
+    ipc: host
+    shm_size: '16gb'
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ["0"]
+              capabilities: [gpu]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:10063/docs"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 180s
+    networks:
+      - encoder-network
+
+  omni-decoder-audio-api:
+    env_file:
+      - .env
+    build:
+      context: ./OmniServe
+      dockerfile: docker/omni_decoder_audio.dockerfile
+    image: omni-decoder-audio-api:latest
+    container_name: omni-decoder-audio-api
+    depends_on:
+      - omni-decoder-audio-torchserve
+    volumes:
+      - ./OmniServe/decoder/audio/track_b/examples:/etc/config:ro
+    environment:
+      - ENDPOINT=http://omni-decoder-audio-torchserve:8081/predictions
+      - ZEROSHOT_MODEL=NCZSCosybigvganDecoder
+      - FINETUNED_MODEL=NCCosybigvganDecoder
+      - DEFAULT_SPEAKER=fkms
+      - SPEAKER_CONFIG_PATH=/etc/config/speaker_config.json
+    ports:
+      - "${OMNI_DECODER_AUDIO_API_PORT:-11180}:8000"
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 2G
+        reservations:
+          cpus: '0.5'
+          memory: 512M
+    networks:
+      - encoder-network
+
+  omni-decoder-audio-torchserve:
+    build:
+      context: ./OmniServe/decoder/audio/codec
+      dockerfile: Dockerfile
+    image: omni-decoder-audio-torchserve:latest
+    container_name: omni-decoder-audio-torchserve
+    command: [
+      "--foreground",
+      "--model-store", "/workspace/models",
+      "--models", "NCCosybigvganDecoder=NCCosybigvganDecoder.mar",
+      "NCZSCosybigvganDecoder=NCZSCosybigvganDecoder.mar",
+      "--ncs",
+      "--ts-config", "/app/config.properties"
+    ]
+    volumes:
+      - ${OMNI_DECODER_AUDIO_TORCHSERVE_MODEL_PATH}:/workspace/models:ro
+      - ./OmniServe/decoder/audio/codec/config.properties:/app/config.properties:ro
+    environment:
+      - JAVA_HOME=/usr/lib/jvm/java-11-openjdk-arm64
+    ports:
+      - "${OMNI_DECODER_AUDIO_TORCHSERVE_PORT:-11181}:8081"
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z localhost 8081"]
+      interval: 30s
+      timeout: 5s
+      start_period: 60s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 8G
+        reservations:
+          cpus: '1.0'
+          memory: 4G
+          devices:
+            - driver: nvidia
+              device_ids: ["0"]
+              capabilities: [gpu]
+    networks:
+      - encoder-network
+
+  omni:
+    env_file:
+      - .env
+    image: vllm:custom
+    build:
+      context: ./OmniServe
+      dockerfile: docker/vllm.aarch64.dockerfile
+    container_name: omni
+    runtime: nvidia
+    user: root
+    entrypoint: ["/bin/bash", "-c"]
+    command: ["vllm serve /vllm-workspace/llm/model --enable-prompt-embeds --served-model-name track_b_model --chat-template-content-format=string --host 0.0.0.0 --port 10032 --trust-remote-code --enable-auto-tool-choice --tool-call-parser omni --reasoning-parser deepseek_v3 --chat-template /vllm-workspace/chat_template.jinja --reasoning-config '{\"think_start_str\": \"<think>\", \"think_end_str\": \"</think>\"}' --gpu-memory-utilization 0.35 --enforce-eager"]
+    ports:
+      - "${OMNI_PORT:-10032}:10032"
+    volumes:
+      - ./OmniServe/omni_chainer/tests/chat_template/track_b/chat_template.jinja:/vllm-workspace/chat_template.jinja:ro
+      - ${OMNI_MODEL_PATH}:/vllm-workspace/llm/model:ro
+    ipc: host
+    shm_size: '16gb'
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:10032/docs"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 180s
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ["0"]
+              capabilities: [gpu]
+    networks:
+      - encoder-network
+
+  omni-chainer:
+    env_file:
+      - .env
+    image: omni-chainer:latest
+    build:
+      context: ./OmniServe
+      dockerfile: docker/omni_chainer.dockerfile
+    container_name: omni-chainer
+    ports:
+      - "${OMNI_CHAINER_API_PORT:-8000}:8000"
+    environment:
+      - TRACK_B_AUDIO_ENCODING_ENDPOINT=http://omni-encoder-audio-api:8002/process_audio
+      - TRACK_B_VISION_ENCODING_ENDPOINT=http://omni-encoder-vision-api:8000/process_image_or_video
+      - TRACK_B_VISION_DECODING_ENDPOINT=http://omni-decoder-vision-api:10063/decode
+      - TRACK_B_AUDIO_DECODING_ENDPOINT=http://omni-decoder-audio-api:8000/predictions
+      - TRACK_B_LLM_ENDPOINT=http://omni:10032/v1/chat/completions
+    networks:
+      - encoder-network
+
+volumes:
+  torch-cache:
+    driver: local
+  minio-data:
+    driver: local
+
+networks:
+  encoder-network:
+    driver: bridge

@@ -1,0 +1,20 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+
+# Env
+.env
+
+# Model weights / conversions
+models/
+
+# Temp
+.tmp_vllm_0.11.2.tar.gz
+.tmp_vllm_src/
+
+# Docker
+**/.cache/
+
+# Generated outputs
+outputs/

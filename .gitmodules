@@ -1,0 +1,3 @@
+[submodule "OmniServe"]
+	path = OmniServe
+	url = https://github.com/NAVER-Cloud-HyperCLOVA-X/OmniServe.git
