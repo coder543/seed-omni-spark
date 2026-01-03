@@ -147,7 +147,19 @@ Once the stack is up:
 http://localhost:3000
 ```
 
-Text chat works out of the box. Image/audio handling will be wired next.
+Text chat works out of the box. Image/audio handling is supported via the proxy.
+
+### Audio streaming (experimental)
+
+The proxy can emit streaming audio chunks during inference, but we disable this by default on DGX Spark because audio decoding currently lags behind token generation. This leads to choppy playback.
+
+To enable it, set:
+
+```
+AUDIO_STREAMING_MAX_BASE64=400000
+```
+
+Setting it to `0` disables streaming audio chunks (default). When disabled, the UI will show audio decode progress and then attach the final WAV.
 
 ---
 

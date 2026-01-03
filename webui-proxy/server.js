@@ -25,6 +25,8 @@ const AUDIO_TORCHSERVE_SPEAKER = process.env.AUDIO_TORCHSERVE_SPEAKER || 'fkms';
 const AUDIO_TORCHSERVE_FORMAT = (process.env.AUDIO_TORCHSERVE_FORMAT || 'pcm').toLowerCase();
 const AUDIO_PCM_SAMPLE_RATE = Number(process.env.AUDIO_PCM_SAMPLE_RATE || 24000);
 const AUDIO_TOKEN_CHUNK_SIZE = Number(process.env.AUDIO_TOKEN_CHUNK_SIZE || 150);
+const AUDIO_STREAMING_MAX_BASE64 = Number(process.env.AUDIO_STREAMING_MAX_BASE64 || 400000);
+const AUDIO_PROGRESS_INTERVAL = Number(process.env.AUDIO_PROGRESS_INTERVAL || 10);
 const VISION_DECODER_ENDPOINT =
   process.env.VISION_DECODER_ENDPOINT || 'http://omni-decoder-vision-api:10063/decode';
 const S3_ENDPOINT = process.env.NCP_S3_ENDPOINT;
@@ -389,6 +391,16 @@ async function streamSseWithTransform(upstream, res, options = {}) {
     res.write(`data: ${JSON.stringify(payload)}\n\n`);
   };
 
+  const emitAudioChunkIfSafe = (wavBuf) => {
+    if (!wavBuf || wavBuf.length === 0) return;
+    if (AUDIO_STREAMING_MAX_BASE64 <= 0) return;
+    const b64 = wavBuf.toString('base64');
+    if (AUDIO_STREAMING_MAX_BASE64 > 0 && b64.length > AUDIO_STREAMING_MAX_BASE64) {
+      return;
+    }
+    emitAudioDelta(res, meta, { format: 'audio/wav', data: b64 });
+  };
+
   const queueAudioDecode = (chunkTokens) => {
     audioDecodeQueue = audioDecodeQueue.then(async () => {
       if (audioProgressDecodeFailed || chunkTokens.length < 3) return;
@@ -402,6 +414,8 @@ async function streamSseWithTransform(upstream, res, options = {}) {
       }
       if (audioChunk.format === 'pcm') {
         audioPcmChunks.push(audioChunk.buf);
+        const wavOut = buildWavFromPcm(audioChunk.buf, AUDIO_PCM_SAMPLE_RATE, 1, 16);
+        emitAudioChunkIfSafe(wavOut);
         if (shouldWriteAudioDebug()) {
           try {
             safeMkdir(AUDIO_DEBUG_DIR);
@@ -413,6 +427,7 @@ async function streamSseWithTransform(upstream, res, options = {}) {
         }
       } else {
         audioWavChunks.push(audioChunk.buf);
+        emitAudioChunkIfSafe(audioChunk.buf);
         if (shouldWriteAudioDebug()) {
           try {
             safeMkdir(AUDIO_DEBUG_DIR);
@@ -432,7 +447,10 @@ async function streamSseWithTransform(upstream, res, options = {}) {
     if (!newTokens || newTokens.length === 0) return;
     allAudioTokens.push(...newTokens);
     audioTokensReceived += newTokens.length;
-    if (audioTokensReceived - audioProgressLastSent >= audioChunkSize) {
+    const interval = Number.isFinite(AUDIO_PROGRESS_INTERVAL) && AUDIO_PROGRESS_INTERVAL > 0
+      ? AUDIO_PROGRESS_INTERVAL
+      : 1;
+    if (audioTokensReceived - audioProgressLastSent >= interval) {
       audioProgressLastSent = audioTokensReceived;
       emitAudioProgress();
     }
@@ -592,9 +610,10 @@ async function streamSseWithTransform(upstream, res, options = {}) {
                   audioTokenDetected = true;
                   const before = combined.slice(0, audioIdx);
                   const after = combined.slice(audioIdx);
-                const cleaned = stripTranscriptTags(before);
-                  if (cleaned) {
-                    const segments = splitThinkSegments(cleaned);
+                  const cleaned = stripTranscriptTags(before);
+                  const emitContent = cleaned || before;
+                  if (emitContent) {
+                    const segments = splitThinkSegments(emitContent);
                     if (segments.length > 0) emitSegments(parsed, segments);
                   }
                   prefixBuffer = '';

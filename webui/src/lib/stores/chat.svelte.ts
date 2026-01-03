@@ -690,7 +690,12 @@ class ChatStore {
 					},
 					onAudioChunk: (base64Data: string, mimeType?: string) => {
 						if (!mimeType?.includes('audio')) return;
-						this.setAttachmentProcessingMessage(assistantMessage.convId, 'Decoding audio...');
+						if (base64Data.length <= MAX_STREAMING_AUDIO_BASE64) {
+							this.enqueueStreamingAudio(assistantMessage.convId, base64Data);
+							this.setAttachmentProcessingMessage(assistantMessage.convId, 'Streaming audio...');
+						} else {
+							this.setAttachmentProcessingMessage(assistantMessage.convId, 'Decoding audio...');
+						}
 					},
 					onAudioProgress: (received?: number, decoded?: number) => {
 						if (!received && !decoded) return;
