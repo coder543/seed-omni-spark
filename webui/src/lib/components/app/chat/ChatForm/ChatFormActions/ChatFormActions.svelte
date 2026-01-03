@@ -46,11 +46,7 @@
 	let currentConfig = $derived(config());
 	let isRouter = $derived(isRouterMode());
 	const imageSystemPrompt =
-		'You must generate images by calling the tool. Respond ONLY with a tool call in this exact XML format:\n' +
-		'<tool_call>t2i_model_generation\n' +
-		'<arg_key>discrete_image_token</arg_key>\n' +
-		'<arg_value><|discrete_image_start|>...<|discrete_image_end|></arg_value>\n' +
-		'</tool_call>';
+		'You are an AI assistant that generates images. When asked to draw or create an image, you MUST use the t2i_model_generation tool to generate the image. Always respond by calling the tool.';
 	let previousSystemPrompt = $state<string | null>(null);
 
 	let conversationModel = $derived(

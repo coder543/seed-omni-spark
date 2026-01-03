@@ -65,7 +65,7 @@ app.get('/props', (_req, res) => {
     default_generation_settings: {
       id: 0,
       id_task: 0,
-      n_ctx: 8192,
+      n_ctx: 32768,
       speculative: false,
       is_processing: false,
       params: {
@@ -394,8 +394,7 @@ async function streamSseWithTransform(upstream, res, options = {}) {
   let audioTokensReceived = 0;
   let audioTokensDecoded = 0;
   let audioProgressLastSent = 0;
-  let xmlToolInProgress = false;
-  let xmlToolBuffer = '';
+  let pendingFinishChunk = null;
   let deferFinalFlush = false;
   const audioChunkSize =
     Number.isFinite(AUDIO_TOKEN_CHUNK_SIZE) && AUDIO_TOKEN_CHUNK_SIZE > 0
@@ -415,69 +414,6 @@ async function streamSseWithTransform(upstream, res, options = {}) {
       }
     };
     res.write(`data: ${JSON.stringify(payload)}\n\n`);
-  };
-
-  const extractXmlToolCall = (xml) => {
-    const start = xml.indexOf('<tool_call>');
-    const end = xml.indexOf('</tool_call>');
-    if (start === -1 || end === -1 || end < start) return null;
-    const payload = xml.slice(start + '<tool_call>'.length, end).trim();
-    const lines = payload.split('\n').map((line) => line.trim());
-    const name = lines[0];
-    const argKeyMatch = payload.match(/<arg_key>([\s\S]*?)<\/arg_key>/);
-    const argValMatch = payload.match(/<arg_value>([\s\S]*?)<\/arg_value>/);
-    const argKey = argKeyMatch ? argKeyMatch[1].trim() : null;
-    const argVal = argValMatch ? argValMatch[1] : null;
-    if (!name || !argKey || argVal == null) return null;
-    return { name, args: { [argKey]: argVal } };
-  };
-
-  const processXmlToolCallContent = (content, parsed) => {
-    let remaining = content;
-    while (remaining.length > 0) {
-      if (!xmlToolInProgress) {
-        const startIdx = remaining.indexOf('<tool_call>');
-        if (startIdx === -1) {
-          return remaining;
-        }
-        const prefix = remaining.slice(0, startIdx);
-        if (prefix) {
-          const segments = splitThinkSegments(prefix);
-          if (segments.length > 0) emitSegments(parsed, segments);
-        }
-        xmlToolInProgress = true;
-        remaining = remaining.slice(startIdx);
-      }
-
-      xmlToolBuffer += remaining;
-      // Emit progress for any token-like markers in the new chunk.
-      const endIdx = xmlToolBuffer.indexOf('</tool_call>');
-      if (endIdx === -1) {
-        return '';
-      }
-      const fullXml = xmlToolBuffer.slice(0, endIdx + '</tool_call>'.length);
-      xmlToolBuffer = xmlToolBuffer.slice(endIdx + '</tool_call>'.length);
-      xmlToolInProgress = false;
-
-      const parsedTool = extractXmlToolCall(fullXml);
-      if (parsedTool?.name === 't2i_model_generation') {
-        toolCalls = mergeToolCalls(toolCalls, [
-          {
-            index: 0,
-            type: 'function',
-            id: `call_${crypto.randomUUID().replace(/-/g, '')}`,
-            function: {
-              name: parsedTool.name,
-              arguments: JSON.stringify(parsedTool.args)
-            }
-          }
-        ]);
-      }
-
-      remaining = xmlToolBuffer;
-      xmlToolBuffer = '';
-    }
-    return '';
   };
 
   const debugAudioTokens = (label, tokens) => {
@@ -712,9 +648,6 @@ async function streamSseWithTransform(upstream, res, options = {}) {
             doneSeen = true;
             if (audioTokenDetected) {
               deferFinalFlush = true;
-            } else {
-              await flushExtras();
-              res.write('data: [DONE]\n\n');
             }
             continue;
           }
@@ -724,14 +657,11 @@ async function streamSseWithTransform(upstream, res, options = {}) {
             if (parsed?.created) meta.created = parsed.created;
             if (parsed?.model) meta.model = parsed.model;
             const delta = parsed?.choices?.[0]?.delta;
+            const finishReason = parsed?.choices?.[0]?.finish_reason;
             if (delta?.content) {
               fullContent += delta.content;
               if (!audioTokenDetected) {
-                const stripped = processXmlToolCallContent(delta.content, parsed);
-                if (!stripped) {
-                  continue;
-                }
-                const combined = prefixBuffer + stripped;
+                const combined = prefixBuffer + delta.content;
                 const audioIdx = combined.indexOf('<|audio');
                 if (audioIdx !== -1) {
                   audioTokenDetected = true;
@@ -813,11 +743,14 @@ async function streamSseWithTransform(upstream, res, options = {}) {
                 cleanedDelta?.reasoning_content ||
                 cleanedDelta?.role ||
                 cleanedDelta?.audio;
-              if (hasContent) {
+              if (hasContent && finishReason == null) {
                 res.write(`data: ${JSON.stringify(cloned)}\n\n`);
               }
-            } else if (!delta?.content) {
+            } else if (!delta?.content && finishReason == null) {
               res.write(`data: ${data}\n\n`);
+            }
+            if (finishReason != null) {
+              pendingFinishChunk = parsed;
             }
           } catch {
             res.write(`${line}\n`);
@@ -825,6 +758,123 @@ async function streamSseWithTransform(upstream, res, options = {}) {
         } else {
           res.write(`${line}\n`);
         }
+      }
+    }
+
+    const tail = buffer.trim();
+    if (tail) {
+      if (tail.startsWith('data: ')) {
+        const data = tail.slice(6).trim();
+        if (data && data !== '[DONE]') {
+          try {
+            const parsed = JSON.parse(data);
+            if (parsed?.id) meta.id = parsed.id;
+            if (parsed?.created) meta.created = parsed.created;
+            if (parsed?.model) meta.model = parsed.model;
+            const delta = parsed?.choices?.[0]?.delta;
+            const finishReason = parsed?.choices?.[0]?.finish_reason;
+            if (delta?.content) {
+              fullContent += delta.content;
+              if (!audioTokenDetected) {
+                const combined = prefixBuffer + delta.content;
+                if (combined) {
+                  const audioIdx = combined.indexOf('<|audio');
+                  if (audioIdx !== -1) {
+                    audioTokenDetected = true;
+                    const before = combined.slice(0, audioIdx);
+                    const after = combined.slice(audioIdx);
+                    if (AUDIO_TOKEN_LOG) {
+                      console.log('[audio-debug] detect audio boundary', {
+                        beforeLen: before.length,
+                        afterLen: after.length,
+                        prefixBufferLen: prefixBuffer.length,
+                        thinkCarryLen: thinkCarry.length
+                      });
+                    }
+                    if (thinkCarry) {
+                      flushThinkCarry(parsed);
+                    }
+                    const cleaned = stripTranscriptTags(before);
+                    const emitContent = cleaned || before;
+                    if (emitContent) {
+                      const segments = splitThinkSegments(emitContent);
+                      if (segments.length > 0) emitSegments(parsed, segments);
+                      if (thinkCarry) {
+                        flushThinkCarry(parsed);
+                      }
+                    }
+                    prefixBuffer = '';
+                    const tokens = extractAudioTokensFromText(after);
+                    enqueueAudioTokens(tokens);
+                  } else {
+                    const safeLength = Math.max(0, combined.length - 6);
+                    const emit = combined.slice(0, safeLength);
+                    prefixBuffer = combined.slice(safeLength);
+                    const cleaned = stripTranscriptTags(emit);
+                    if (cleaned) {
+                      const segments = splitThinkSegments(cleaned);
+                      if (segments.length > 0) emitSegments(parsed, segments);
+                    }
+                  }
+                }
+              } else {
+                const tokens = extractAudioTokensFromText(delta.content);
+                enqueueAudioTokens(tokens);
+              }
+            }
+            if (delta?.tool_calls) {
+              toolCalls = mergeToolCalls(toolCalls, delta.tool_calls);
+              if (IMAGE_DEBUG) {
+                console.log('[image] stream tool_call delta', JSON.stringify(delta.tool_calls));
+              }
+              if (IMAGE_TRACE) {
+                const summaries = delta.tool_calls.map((call) => ({
+                  index: call?.index,
+                  id: call?.id,
+                  name: call?.function?.name,
+                  argsType: typeof call?.function?.arguments,
+                  argsLen:
+                    typeof call?.function?.arguments === 'string'
+                      ? call.function.arguments.length
+                      : JSON.stringify(call?.function?.arguments || '').length
+                }));
+                console.log('[image-trace] stream tool_calls delta', summaries);
+                console.log('[image-trace] stream tool_calls length', toolCalls.length);
+              }
+            }
+            if (delta?.audio) {
+              audio = await normalizeAudioDelta(delta.audio);
+              if (audio) {
+                delta.audio = audio;
+                sentAudio = true;
+              }
+            }
+            if (delta?.tool_calls || delta?.audio) {
+              const cloned = JSON.parse(JSON.stringify(parsed));
+              const cleanedDelta = cloned?.choices?.[0]?.delta;
+              if (cleanedDelta) {
+                delete cleanedDelta.tool_calls;
+              }
+              const hasContent =
+                cleanedDelta?.content ||
+                cleanedDelta?.reasoning_content ||
+                cleanedDelta?.role ||
+                cleanedDelta?.audio;
+              if (hasContent && finishReason == null) {
+                res.write(`data: ${JSON.stringify(cloned)}\n\n`);
+              }
+            } else if (!delta?.content && finishReason == null) {
+              res.write(`data: ${data}\n\n`);
+            }
+            if (finishReason != null) {
+              pendingFinishChunk = parsed;
+            }
+          } catch {
+            res.write(`${tail}\n`);
+          }
+        }
+      } else {
+        res.write(`${tail}\n`);
       }
     }
   } finally {
@@ -841,19 +891,28 @@ async function streamSseWithTransform(upstream, res, options = {}) {
       const tail = prefixBuffer;
       const cleaned = stripTranscriptTags(tail);
       if (cleaned) {
-        const segments = splitThinkSegments(cleaned);
-        if (segments.length > 0) {
-          emitSegments(
+        emitSegments(
+          {
+            id: meta.id || `chatcmpl-${crypto.randomUUID().replace(/-/g, '')}`,
+            object: 'chat.completion.chunk',
+            created: meta.created || Math.floor(Date.now() / 1000),
+            model: meta.model || 'track_b_model',
+            choices: [{ index: 0, delta: { content: '' } }]
+          },
+          [
             {
-              id: meta.id || `chatcmpl-${crypto.randomUUID().replace(/-/g, '')}`,
-              object: 'chat.completion.chunk',
-              created: meta.created || Math.floor(Date.now() / 1000),
-              model: meta.model || 'track_b_model',
-              choices: [{ index: 0, delta: { content: '' } }]
-            },
-            segments
-          );
-        }
+              type: thinkInProgress ? 'reasoning' : 'content',
+              text: cleaned
+            }
+          ]
+        );
+      }
+    }
+    if (pendingFinishChunk) {
+      try {
+        res.write(`data: ${JSON.stringify(pendingFinishChunk)}\n\n`);
+      } catch {
+        // ignore write failures on finish chunk
       }
     }
     if (audioTokenDetected && !audio) {
@@ -869,19 +928,21 @@ async function streamSseWithTransform(upstream, res, options = {}) {
       if (prefixBuffer) {
         const cleaned = stripTranscriptTags(prefixBuffer);
         if (cleaned) {
-          const segments = splitThinkSegments(cleaned);
-          if (segments.length > 0) {
-            emitSegments(
+          emitSegments(
+            {
+              id: meta.id || `chatcmpl-${crypto.randomUUID().replace(/-/g, '')}`,
+              object: 'chat.completion.chunk',
+              created: meta.created || Math.floor(Date.now() / 1000),
+              model: meta.model || 'track_b_model',
+              choices: [{ index: 0, delta: { content: '' } }]
+            },
+            [
               {
-                id: meta.id || `chatcmpl-${crypto.randomUUID().replace(/-/g, '')}`,
-                object: 'chat.completion.chunk',
-                created: meta.created || Math.floor(Date.now() / 1000),
-                model: meta.model || 'track_b_model',
-                choices: [{ index: 0, delta: { content: '' } }]
-              },
-              segments
-            );
-          }
+                type: thinkInProgress ? 'reasoning' : 'content',
+                text: cleaned
+              }
+            ]
+          );
         }
         prefixBuffer = '';
       }
@@ -942,11 +1003,11 @@ async function streamSseWithTransform(upstream, res, options = {}) {
         audio = { format: 'audio/wav', data: finalWav.toString('base64') };
       }
     }
-    if (!doneSeen) {
-      await flushExtras();
-    } else if (deferFinalFlush) {
+    if (doneSeen) {
       await flushExtras();
       res.write('data: [DONE]\n\n');
+    } else {
+      await flushExtras();
     }
     res.end();
   }
@@ -1165,6 +1226,7 @@ function mergeToolCalls(existing, deltas) {
     const prevEntry = result[index];
     const prevFn = prevEntry.function || {};
     const nextFn = delta.function || {};
+    const prevArgs = prevFn.arguments;
     const nextArgs = Object.prototype.hasOwnProperty.call(nextFn, 'arguments')
       ? nextFn.arguments
       : undefined;
@@ -1172,23 +1234,21 @@ function mergeToolCalls(existing, deltas) {
     if (nextFn.name == null && prevFn.name) {
       mergedFn.name = prevFn.name;
     }
-    // Avoid clobbering accumulated arguments with empty strings.
-    if (nextArgs === '') {
-      mergedFn.arguments = prevFn.arguments;
+    if (typeof nextArgs === 'string') {
+      if (nextArgs.trim().startsWith('{') || !prevArgs) {
+        mergedFn.arguments = nextArgs;
+      } else {
+        mergedFn.arguments = `${prevArgs}${nextArgs}`;
+      }
+    } else if (nextArgs === '') {
+      mergedFn.arguments = prevArgs;
+    } else if (nextArgs === undefined) {
+      mergedFn.arguments = prevArgs;
     }
     const mergedEntry = { ...prevEntry, ...delta, function: mergedFn };
     if (delta.id == null && prevEntry.id) mergedEntry.id = prevEntry.id;
     if (delta.type == null && prevEntry.type) mergedEntry.type = prevEntry.type;
     result[index] = mergedEntry;
-    if (nextArgs) {
-      const prev = result[index]?.function?.arguments || '';
-      const next = nextArgs;
-      if (typeof next === 'string' && next.trim().startsWith('{')) {
-        result[index].function.arguments = next;
-      } else {
-        result[index].function.arguments = `${prev}${next}`;
-      }
-    }
   }
   return result;
 }
