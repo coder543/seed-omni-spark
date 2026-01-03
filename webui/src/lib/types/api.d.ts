@@ -244,6 +244,10 @@ export interface ApiChatCompletionStreamChunk {
 			reasoning_content?: string;
 			model?: string;
 			tool_calls?: ApiChatCompletionToolCallDelta[];
+			audio?: {
+				data?: string;
+				format?: string;
+			};
 		};
 	}>;
 	timings?: {
@@ -266,6 +270,10 @@ export interface ApiChatCompletionResponse {
 			reasoning_content?: string;
 			model?: string;
 			tool_calls?: ApiChatCompletionToolCallDelta[];
+			audio?: {
+				data?: string;
+				format?: string;
+			};
 		};
 	}>;
 }

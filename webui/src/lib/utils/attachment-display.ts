@@ -46,10 +46,17 @@ export function getAttachmentDisplayItems(
 	for (const [index, attachment] of attachments.entries()) {
 		const isImage = isImageFile(attachment);
 
+		const attachmentPreview =
+			isImage && 'base64Url' in attachment
+				? attachment.base64Url
+				: isImage && 'url' in attachment
+					? attachment.url
+					: undefined;
+
 		items.push({
 			id: `attachment-${index}`,
 			name: attachment.name,
-			preview: isImage && 'base64Url' in attachment ? attachment.base64Url : undefined,
+			preview: attachmentPreview,
 			isImage,
 			attachment,
 			attachmentIndex: index,

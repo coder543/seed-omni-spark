@@ -11,14 +11,16 @@ export interface DatabaseConversation {
 export interface DatabaseMessageExtraAudioFile {
 	type: AttachmentType.AUDIO;
 	name: string;
-	base64Data: string;
-	mimeType: string;
+	base64Data?: string;
+	mimeType?: string;
+	url?: string;
 }
 
 export interface DatabaseMessageExtraImageFile {
 	type: AttachmentType.IMAGE;
 	name: string;
-	base64Url: string;
+	base64Url?: string;
+	url?: string;
 }
 
 /**

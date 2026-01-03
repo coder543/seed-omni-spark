@@ -1,5 +1,6 @@
 <script lang="ts">
 	import {
+		ChatAttachmentsList,
 		ModelBadge,
 		ChatMessageActions,
 		ChatMessageStatistics,
@@ -242,6 +243,12 @@
 			<pre class="raw-output">{messageContent || ''}</pre>
 		{:else}
 			<MarkdownContent content={messageContent || ''} />
+		{/if}
+
+		{#if message.extra && message.extra.length > 0}
+			<div class="mt-4">
+				<ChatAttachmentsList attachments={message.extra} readonly={true} imageHeight="h-80" />
+			</div>
 		{/if}
 	{:else}
 		<div class="text-sm whitespace-pre-wrap">

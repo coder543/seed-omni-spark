@@ -15,6 +15,7 @@ import {
 } from '$lib/utils';
 import { SvelteMap } from 'svelte/reactivity';
 import { DEFAULT_CONTEXT } from '$lib/constants/default-context';
+import { AttachmentType } from '$lib/enums';
 
 /**
  * chatStore - Active AI interaction and streaming state management
@@ -562,15 +563,22 @@ class ChatStore {
 					finalContent?: string,
 					reasoningContent?: string,
 					timings?: ChatMessageTimings,
-					toolCallContent?: string
+					toolCallContent?: string,
+					audioUrl?: string
 				) => {
 					this.stopStreaming();
+
+					const assistantExtras = this.buildAssistantExtras(
+						toolCallContent || streamedToolCallContent,
+						audioUrl
+					);
 
 					const updateData: Record<string, unknown> = {
 						content: finalContent || streamedContent,
 						thinking: reasoningContent || streamedReasoningContent,
 						toolCalls: toolCallContent || streamedToolCallContent,
-						timings
+						timings,
+						extra: assistantExtras
 					};
 					if (resolvedModel && !modelPersisted) {
 						updateData.model = resolvedModel;
@@ -580,7 +588,8 @@ class ChatStore {
 					const idx = conversationsStore.findMessageIndex(assistantMessage.id);
 					const uiUpdate: Partial<DatabaseMessage> = {
 						content: updateData.content as string,
-						toolCalls: updateData.toolCalls as string
+						toolCalls: updateData.toolCalls as string,
+						extra: assistantExtras
 					};
 					if (timings) uiUpdate.timings = timings;
 					if (resolvedModel) uiUpdate.model = resolvedModel;
@@ -716,6 +725,135 @@ class ChatStore {
 		if (!activeConv) return;
 
 		await this.stopGenerationForChat(activeConv.id);
+	}
+
+	private buildAssistantExtras(
+		toolCallContent?: string,
+		audioUrl?: string
+	): DatabaseMessageExtra[] | undefined {
+		const extras: DatabaseMessageExtra[] = [];
+
+		if (toolCallContent) {
+			try {
+				const parsed = JSON.parse(toolCallContent);
+				if (Array.isArray(parsed)) {
+					for (const call of parsed) {
+						const fnName = call?.function?.name;
+						if (fnName !== 't2i_model_generation') continue;
+						const argsRaw = call?.function?.arguments;
+						if (!argsRaw) continue;
+						let args: Record<string, unknown> | undefined;
+						if (typeof argsRaw === 'string') {
+							try {
+								args = JSON.parse(argsRaw);
+							} catch {
+								args = undefined;
+							}
+						} else if (typeof argsRaw === 'object' && argsRaw) {
+							args = argsRaw;
+						}
+						const token = args?.discrete_image_token;
+						if (typeof token === 'string') {
+							if (token.trim().startsWith('data:')) {
+								const parsedData = this.parseDataUrl(token);
+								if (parsedData) {
+									const name = this.filenameFromDataUrl(parsedData.mime, 'generated-image');
+									extras.push({
+										type: AttachmentType.IMAGE,
+										name,
+										base64Url: token
+									});
+								}
+							} else if (this.isLikelyUrl(token)) {
+								const name = this.filenameFromUrl(token, 'generated-image');
+								extras.push({
+									type: AttachmentType.IMAGE,
+									name,
+									url: token
+								});
+							}
+						}
+					}
+				}
+			} catch {
+				// ignore malformed tool calls
+			}
+		}
+
+		if (audioUrl) {
+			if (audioUrl.trim().startsWith('data:')) {
+				const parsedData = this.parseDataUrl(audioUrl);
+				if (parsedData) {
+					const name = this.filenameFromDataUrl(parsedData.mime, 'generated-audio');
+					extras.push({
+						type: AttachmentType.AUDIO,
+						name,
+						base64Data: parsedData.data,
+						mimeType: parsedData.mime
+					});
+				}
+			} else {
+				const name = this.filenameFromUrl(audioUrl, 'generated-audio');
+				const mimeType = this.mimeFromUrl(audioUrl);
+				extras.push({
+					type: AttachmentType.AUDIO,
+					name,
+					url: audioUrl,
+					mimeType
+				});
+			}
+		}
+
+		return extras.length > 0 ? extras : undefined;
+	}
+
+	private filenameFromUrl(url: string, fallbackBase: string): string {
+		try {
+			const clean = url.split('?')[0];
+			const base = clean.split('/').pop() || fallbackBase;
+			return base || fallbackBase;
+		} catch {
+			return fallbackBase;
+		}
+	}
+
+	private mimeFromUrl(url: string): string | undefined {
+		const lower = url.split('?')[0].toLowerCase();
+		if (lower.endsWith('.wav')) return 'audio/wav';
+		if (lower.endsWith('.mp3')) return 'audio/mpeg';
+		if (lower.endsWith('.webm')) return 'audio/webm';
+		return undefined;
+	}
+
+	private isLikelyUrl(value: string): boolean {
+		const trimmed = value.trim();
+		return (
+			trimmed.startsWith('http://') ||
+			trimmed.startsWith('https://') ||
+			trimmed.startsWith('s3://') ||
+			trimmed.startsWith('data:')
+		);
+	}
+
+	private parseDataUrl(
+		value: string
+	): { mime: string; data: string } | undefined {
+		const match = /^data:([^;]+);base64,(.*)$/.exec(value.trim());
+		if (!match) return undefined;
+		return { mime: match[1], data: match[2] };
+	}
+
+	private filenameFromDataUrl(mime: string, fallbackBase: string): string {
+		const extensionMap: Record<string, string> = {
+			'audio/mpeg': 'mp3',
+			'audio/wav': 'wav',
+			'audio/webm': 'webm',
+			'image/png': 'png',
+			'image/jpeg': 'jpg',
+			'image/webp': 'webp'
+		};
+		const ext = extensionMap[mime] || 'bin';
+		return `${fallbackBase}.${ext}`;
 	}
 
 	async stopGenerationForChat(convId: string): Promise<void> {
@@ -1060,7 +1198,9 @@ class ChatStore {
 					onComplete: async (
 						finalContent?: string,
 						reasoningContent?: string,
-						timings?: ChatMessageTimings
+						timings?: ChatMessageTimings,
+						_toolCalls?: string,
+						_audioUrl?: string
 					) => {
 						const fullContent = originalContent + (finalContent || appendedContent);
 						const fullThinking = originalThinking + (reasoningContent || appendedThinking);

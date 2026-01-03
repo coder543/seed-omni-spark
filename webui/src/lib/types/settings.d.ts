@@ -56,7 +56,8 @@ export interface SettingsChatServiceOptions {
 		response: string,
 		reasoningContent?: string,
 		timings?: ChatMessageTimings,
-		toolCalls?: string
+		toolCalls?: string,
+		audioUrl?: string
 	) => void;
 	onError?: (error: Error) => void;
 }

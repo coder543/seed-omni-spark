@@ -41,7 +41,11 @@
 
 	let displayPreview = $derived(
 		uploadedFile?.preview ||
-			(isImage && attachment && 'base64Url' in attachment ? attachment.base64Url : preview)
+			(isImage && attachment && 'base64Url' in attachment
+				? attachment.base64Url
+				: isImage && attachment && 'url' in attachment
+					? attachment.url
+					: preview)
 	);
 
 	let displayTextContent = $derived(
@@ -249,6 +253,10 @@
 
 					{#if uploadedFile?.preview}
 						<audio controls class="mb-4 w-full" src={uploadedFile.preview}>
+							Your browser does not support the audio element.
+						</audio>
+					{:else if isAudio && attachment && 'url' in attachment && attachment.url}
+						<audio controls class="mb-4 w-full" src={attachment.url}>
 							Your browser does not support the audio element.
 						</audio>
 					{:else if isAudio && attachment && 'mimeType' in attachment && 'base64Data' in attachment}

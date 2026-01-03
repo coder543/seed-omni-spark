@@ -266,7 +266,8 @@ export class ChatService {
 			response: string,
 			reasoningContent?: string,
 			timings?: ChatMessageTimings,
-			toolCalls?: string
+			toolCalls?: string,
+			audioUrl?: string
 		) => void,
 		onError?: (error: Error) => void,
 		onReasoningChunk?: (chunk: string) => void,
@@ -286,6 +287,7 @@ export class ChatService {
 		let aggregatedContent = '';
 		let fullReasoningContent = '';
 		let aggregatedToolCalls: ApiChatCompletionToolCall[] = [];
+		let audioUrl: string | undefined;
 		let lastTimings: ChatMessageTimings | undefined;
 		let streamFinished = false;
 		let modelEmitted = false;
@@ -358,6 +360,8 @@ export class ChatService {
 							const content = parsed.choices[0]?.delta?.content;
 							const reasoningContent = parsed.choices[0]?.delta?.reasoning_content;
 							const toolCalls = parsed.choices[0]?.delta?.tool_calls;
+							const audioData = parsed.choices[0]?.delta?.audio?.data;
+							const audioFormat = parsed.choices[0]?.delta?.audio?.format;
 							const timings = parsed.timings;
 							const promptProgress = parsed.prompt_progress;
 
@@ -393,6 +397,10 @@ export class ChatService {
 							}
 
 							processToolCallDelta(toolCalls);
+
+							if (audioData) {
+								audioUrl = ChatService.decodeAudioData(audioData, audioFormat);
+							}
 						} catch (e) {
 							console.error('Error parsing JSON chunk:', e);
 						}
@@ -414,7 +422,8 @@ export class ChatService {
 					aggregatedContent,
 					fullReasoningContent || undefined,
 					lastTimings,
-					finalToolCalls
+					finalToolCalls,
+					audioUrl
 				);
 			}
 		} catch (error) {
@@ -444,7 +453,8 @@ export class ChatService {
 			response: string,
 			reasoningContent?: string,
 			timings?: ChatMessageTimings,
-			toolCalls?: string
+			toolCalls?: string,
+			audioUrl?: string
 		) => void,
 		onError?: (error: Error) => void,
 		onToolCallChunk?: (chunk: string) => void,
@@ -468,6 +478,9 @@ export class ChatService {
 			const content = data.choices[0]?.message?.content || '';
 			const reasoningContent = data.choices[0]?.message?.reasoning_content;
 			const toolCalls = data.choices[0]?.message?.tool_calls;
+			const audioData = data.choices[0]?.message?.audio?.data;
+			const audioFormat = data.choices[0]?.message?.audio?.format;
+			const audioUrl = audioData ? ChatService.decodeAudioData(audioData, audioFormat) : undefined;
 
 			if (reasoningContent) {
 				console.log('Full reasoning content:', reasoningContent);
@@ -486,12 +499,12 @@ export class ChatService {
 				}
 			}
 
-			if (!content.trim() && !serializedToolCalls) {
+			if (!content.trim() && !serializedToolCalls && !audioUrl) {
 				const noResponseError = new Error('No response received from server. Please try again.');
 				throw noResponseError;
 			}
 
-			onComplete?.(content, reasoningContent, undefined, serializedToolCalls);
+			onComplete?.(content, reasoningContent, undefined, serializedToolCalls, audioUrl);
 
 			return content;
 		} catch (error) {
@@ -579,6 +592,13 @@ export class ChatService {
 	static convertDbMessageToApiChatMessageData(
 		message: DatabaseMessage & { extra?: DatabaseMessageExtra[] }
 	): ApiChatMessageData {
+		if (message.role !== 'user') {
+			return {
+				role: message.role as 'user' | 'assistant' | 'system',
+				content: message.content
+			};
+		}
+
 		if (!message.extra || message.extra.length === 0) {
 			return {
 				role: message.role as 'user' | 'assistant' | 'system',
@@ -601,9 +621,11 @@ export class ChatService {
 		);
 
 		for (const image of imageFiles) {
+			const imageUrl = image.base64Url || image.url;
+			if (!imageUrl) continue;
 			contentParts.push({
 				type: 'image_url',
-				image_url: { url: image.base64Url }
+				image_url: { url: imageUrl }
 			});
 		}
 
@@ -757,6 +779,26 @@ export class ChatService {
 
 		// avoid guessing from non-standard locations (metadata, etc.)
 		return undefined;
+	}
+
+	private static decodeBase64ToString(data: string): string {
+		try {
+			let normalized = data.replace(/-/g, '+').replace(/_/g, '/');
+			const pad = normalized.length % 4;
+			if (pad) normalized += '='.repeat(4 - pad);
+			return atob(normalized);
+		} catch {
+			return data;
+		}
+	}
+
+	private static decodeAudioData(data: string, format?: string): string | undefined {
+		if (!data) return undefined;
+		if (format && format.trim()) {
+			return `data:${format};base64,${data}`;
+		}
+		const decoded = ChatService.decodeBase64ToString(data).trim();
+		return decoded || undefined;
 	}
 
 	/**
