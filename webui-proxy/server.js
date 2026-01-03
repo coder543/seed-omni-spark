@@ -22,6 +22,8 @@ const AUDIO_TORCHSERVE_ENDPOINT =
   process.env.AUDIO_TORCHSERVE_ENDPOINT ||
   'http://omni-decoder-audio-torchserve:8081/predictions/NCCosybigvganDecoder';
 const AUDIO_TORCHSERVE_SPEAKER = process.env.AUDIO_TORCHSERVE_SPEAKER || 'fkms';
+const AUDIO_TORCHSERVE_FORMAT = (process.env.AUDIO_TORCHSERVE_FORMAT || 'pcm').toLowerCase();
+const AUDIO_PCM_SAMPLE_RATE = Number(process.env.AUDIO_PCM_SAMPLE_RATE || 24000);
 const AUDIO_TOKEN_CHUNK_SIZE = Number(process.env.AUDIO_TOKEN_CHUNK_SIZE || 150);
 const VISION_DECODER_ENDPOINT =
   process.env.VISION_DECODER_ENDPOINT || 'http://omni-decoder-vision-api:10063/decode';
@@ -359,6 +361,7 @@ async function streamSseWithTransform(upstream, res, options = {}) {
   let audioTokenBuffer = [];
   let allAudioTokens = [];
   let audioWavChunks = [];
+  let audioPcmChunks = [];
   let audioProgressDecodeFailed = false;
   let audioFinalDecodeFailed = false;
   let audioDecodeQueue = Promise.resolve();
@@ -389,19 +392,35 @@ async function streamSseWithTransform(upstream, res, options = {}) {
   const queueAudioDecode = (chunkTokens) => {
     audioDecodeQueue = audioDecodeQueue.then(async () => {
       if (audioProgressDecodeFailed || chunkTokens.length < 3) return;
-      const wavBuf = await fetchTorchserveWav(chunkTokens, extractSpeakerId(fullContent) || AUDIO_TORCHSERVE_SPEAKER);
-      if (!wavBuf) {
+      const audioChunk = await fetchTorchserveAudio(
+        chunkTokens,
+        extractSpeakerId(fullContent) || AUDIO_TORCHSERVE_SPEAKER
+      );
+      if (!audioChunk) {
         audioProgressDecodeFailed = true;
         return;
       }
-      audioWavChunks.push(wavBuf);
-      if (shouldWriteAudioDebug()) {
-        try {
-          safeMkdir(AUDIO_DEBUG_DIR);
-          const name = `audio-chunk-${String(audioWavChunks.length).padStart(4, '0')}.wav`;
-          fs.writeFileSync(path.join(AUDIO_DEBUG_DIR, name), wavBuf);
-        } catch (err) {
-          console.warn('audio-debug: failed to write chunk', err);
+      if (audioChunk.format === 'pcm') {
+        audioPcmChunks.push(audioChunk.buf);
+        if (shouldWriteAudioDebug()) {
+          try {
+            safeMkdir(AUDIO_DEBUG_DIR);
+            const name = `audio-chunk-${String(audioPcmChunks.length).padStart(4, '0')}.pcm`;
+            fs.writeFileSync(path.join(AUDIO_DEBUG_DIR, name), audioChunk.buf);
+          } catch (err) {
+            console.warn('audio-debug: failed to write chunk', err);
+          }
+        }
+      } else {
+        audioWavChunks.push(audioChunk.buf);
+        if (shouldWriteAudioDebug()) {
+          try {
+            safeMkdir(AUDIO_DEBUG_DIR);
+            const name = `audio-chunk-${String(audioWavChunks.length).padStart(4, '0')}.wav`;
+            fs.writeFileSync(path.join(AUDIO_DEBUG_DIR, name), audioChunk.buf);
+          } catch (err) {
+            console.warn('audio-debug: failed to write chunk', err);
+          }
         }
       }
       audioTokensDecoded += chunkTokens.length;
@@ -684,7 +703,14 @@ async function streamSseWithTransform(upstream, res, options = {}) {
         audioProgressDecodeFailed = true;
       }
       let finalWav;
-      if (!audioProgressDecodeFailed && audioWavChunks.length > 0) {
+      if (!audioProgressDecodeFailed && audioPcmChunks.length > 0) {
+        finalWav = buildWavFromPcm(
+          Buffer.concat(audioPcmChunks),
+          AUDIO_PCM_SAMPLE_RATE,
+          1,
+          16
+        );
+      } else if (!audioProgressDecodeFailed && audioWavChunks.length > 0) {
         try {
           finalWav = await concatWavBuffers(audioWavChunks);
         } catch {
@@ -692,12 +718,21 @@ async function streamSseWithTransform(upstream, res, options = {}) {
         }
       }
       if (!finalWav && !audioFinalDecodeFailed && allAudioTokens.length >= 3) {
-        const wavBuf = await fetchTorchserveWav(
+        const audioChunk = await fetchTorchserveAudio(
           allAudioTokens,
           extractSpeakerId(fullContent) || AUDIO_TORCHSERVE_SPEAKER
         );
-        if (wavBuf) {
-          finalWav = wavBuf;
+        if (audioChunk) {
+          if (audioChunk.format === 'pcm') {
+            finalWav = buildWavFromPcm(
+              audioChunk.buf,
+              AUDIO_PCM_SAMPLE_RATE,
+              1,
+              16
+            );
+          } else {
+            finalWav = audioChunk.buf;
+          }
         } else {
           audioFinalDecodeFailed = true;
         }
@@ -874,23 +909,39 @@ async function decodeAudioTokens(tokens, format, speaker, onChunk) {
 
   for (let i = 0; i < tokens.length; i += chunkSize) {
     const chunk = tokens.slice(i, i + chunkSize);
-    const wavBuf = await fetchTorchserveWav(chunk, speaker);
-    if (!wavBuf) {
+    const audioChunk = await fetchTorchserveAudio(chunk, speaker);
+    if (!audioChunk) {
       console.warn('audio-decode: torchserve chunk failed', { index: i, size: chunk.length });
       return undefined;
     }
-    if (onChunk) {
-      await onChunk({ format: 'audio/wav', data: wavBuf.toString('base64') });
+    if (audioChunk.format === 'pcm') {
+      if (onChunk) {
+        const wavOut = buildWavFromPcm(
+          audioChunk.buf,
+          AUDIO_PCM_SAMPLE_RATE,
+          1,
+          16
+        );
+        await onChunk({ format: 'audio/wav', data: wavOut.toString('base64') });
+      }
+      if (!audioSpec) {
+        audioSpec = { sampleRate: AUDIO_PCM_SAMPLE_RATE, numChannels: 1, bitsPerSample: 16 };
+      }
+      pcmChunks.push(audioChunk.buf);
+    } else {
+      if (onChunk) {
+        await onChunk({ format: 'audio/wav', data: audioChunk.buf.toString('base64') });
+      }
+      const parsed = parseWav(audioChunk.buf);
+      if (!parsed) {
+        console.warn('audio-decode: failed to parse wav chunk');
+        return undefined;
+      }
+      if (!audioSpec) {
+        audioSpec = parsed;
+      }
+      pcmChunks.push(parsed.data);
     }
-    const parsed = parseWav(wavBuf);
-    if (!parsed) {
-      console.warn('audio-decode: failed to parse wav chunk');
-      return undefined;
-    }
-    if (!audioSpec) {
-      audioSpec = parsed;
-    }
-    pcmChunks.push(parsed.data);
   }
 
   if (!audioSpec) return undefined;
@@ -1151,14 +1202,14 @@ async function decodeVisionTokensToUrl(token) {
   }
 }
 
-async function fetchTorchserveWav(units, speaker) {
+async function fetchTorchserveAudio(units, speaker) {
   try {
     const resp = await fetch(AUDIO_TORCHSERVE_ENDPOINT, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
         unit: units,
-        format: 'wav',
+        format: AUDIO_TORCHSERVE_FORMAT,
         speaker: speaker || AUDIO_TORCHSERVE_SPEAKER
       })
     });
@@ -1166,7 +1217,14 @@ async function fetchTorchserveWav(units, speaker) {
       console.warn('audio-decode: torchserve response not ok', { status: resp.status });
       return undefined;
     }
-    return Buffer.from(await resp.arrayBuffer());
+    const buf = Buffer.from(await resp.arrayBuffer());
+    const contentType = (resp.headers.get('content-type') || '').toLowerCase();
+    const effectiveFormat = contentType.includes('audio/pcm')
+      ? 'pcm'
+      : contentType.includes('audio/wav')
+        ? 'wav'
+        : AUDIO_TORCHSERVE_FORMAT;
+    return { buf, format: effectiveFormat };
   } catch {
     console.warn('audio-decode: torchserve exception');
     return undefined;

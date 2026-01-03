@@ -150,6 +150,7 @@ services:
       - FINETUNED_MODEL=NCCosybigvganDecoder
       - DEFAULT_SPEAKER=fkms
       - SPEAKER_CONFIG_PATH=/etc/config/speaker_config.json
+      - AUDIO_DECODER_SAMPLE_RATE=${AUDIO_DECODER_SAMPLE_RATE:-24000}
     ports:
       - "${OMNI_DECODER_AUDIO_API_PORT:-11180}:8000"
     deploy:
@@ -183,8 +184,12 @@ services:
       - ./OmniServe/decoder/audio/codec/config.properties:/app/config.properties:ro
     environment:
       - JAVA_HOME=/usr/lib/jvm/java-11-openjdk-arm64
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
+      - CUDA_VISIBLE_DEVICES=0
     ports:
       - "${OMNI_DECODER_AUDIO_TORCHSERVE_PORT:-11181}:8081"
+    runtime: nvidia
     healthcheck:
       test: ["CMD-SHELL", "nc -z localhost 8081"]
       interval: 30s
@@ -272,6 +277,8 @@ services:
       - PORT=${WEBUI_PORT:-3000}
       - MINIO_ENDPOINT=http://minio:9000
       - AUDIO_TOKEN_CHUNK_SIZE=25
+      - AUDIO_TORCHSERVE_FORMAT=${AUDIO_TORCHSERVE_FORMAT:-pcm}
+      - AUDIO_PCM_SAMPLE_RATE=${AUDIO_PCM_SAMPLE_RATE:-24000}
       - AUDIO_DEBUG_DIR=${AUDIO_DEBUG_DIR:-}
       - IMAGE_DEBUG=${IMAGE_DEBUG:-0}
       - NCP_S3_ENDPOINT=${NCP_S3_ENDPOINT}

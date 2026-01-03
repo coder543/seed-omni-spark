@@ -38,19 +38,34 @@ if [[ ! -x "$PYTHON_BIN" ]]; then
   PYTHON_BIN="python3"
 fi
 
-AUDIO_URL=$(AUDIO_B64="$AUDIO_B64" "$PYTHON_BIN" - <<'PY'
+OUT_PATH="$OUT_DIR/$OUT_FILE"
+DECODE_RESULT=$(AUDIO_B64="$AUDIO_B64" OUT_PATH="$OUT_PATH" "$PYTHON_BIN" - <<'PY'
 import base64, os, sys
 data = os.environ.get("AUDIO_B64", "")
-if not data:
+out_path = os.environ.get("OUT_PATH", "")
+if not data or not out_path:
     sys.exit(1)
-# Add padding if missing
 pad = (-len(data)) % 4
 data += "=" * pad
-print(base64.urlsafe_b64decode(data).decode("utf-8"), end="")
+raw = base64.urlsafe_b64decode(data)
+text = None
+try:
+    text = raw.decode("utf-8")
+except Exception:
+    text = None
+if text and text.startswith(("http://", "https://", "s3://")):
+    print(f"URL:{text}", end="")
+    sys.exit(0)
+with open(out_path, "wb") as f:
+    f.write(raw)
+print(f"FILE:{out_path}", end="")
 PY
 )
-AUDIO_URL_LOCAL=$(echo "$AUDIO_URL" | sed 's|http://minio:9000|http://localhost:9000|')
 
-curl -sS "$AUDIO_URL_LOCAL" -o "$OUT_DIR/$OUT_FILE"
+if [[ "$DECODE_RESULT" == URL:* ]]; then
+  AUDIO_URL="${DECODE_RESULT#URL:}"
+  AUDIO_URL_LOCAL=$(echo "$AUDIO_URL" | sed 's|http://minio:9000|http://localhost:9000|')
+  curl -sS "$AUDIO_URL_LOCAL" -o "$OUT_PATH"
+fi
 
 echo "Saved audio to $OUT_DIR/$OUT_FILE"
