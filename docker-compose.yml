@@ -38,7 +38,7 @@ services:
     ports:
       - "${OMNI_ENCODER_AUDIO_API_PORT:-10002}:8002"
     volumes:
-      - ${OMNI_ENCODER_AUDIO_MODEL_PATH:-models/track_b/ae}:/workspace/app/model/weights:ro
+      - ${OMNI_ENCODER_AUDIO_MODEL_PATH:-models/track_b/ae/HyperCLOVAX-SEED-Omni-8B}:/workspace/app/model/weights:ro
     environment:
       - CONFIG_PATH=/workspace/config.json
       - MODEL_ID=${OMNI_ENCODER_AUDIO_MODEL_ID}
@@ -79,7 +79,7 @@ services:
     ports:
       - "${OMNI_ENCODER_VISION_API_PORT:-10064}:8000"
     volumes:
-      - ${OMNI_ENCODER_VISION_MODEL_PATH:-models/track_b/ve}:/workspace/app/model/weights:ro
+      - ${OMNI_ENCODER_VISION_MODEL_PATH:-models/track_b/ve/HyperCLOVAX-SEED-Omni-8B}:/workspace/app/model/weights:ro
     environment:
       - CONFIG_PATH=/workspace/config.json
       - MODEL_ID=${OMNI_ENCODER_VISION_MODEL_ID}
@@ -118,12 +118,12 @@ services:
     image: omni-decoder-vision-api:latest
     volumes:
       - torch-cache:/app/.cache/torch
-      - ${OMNI_DECODER_VISION_MODEL_PATH:-models/track_b/vd}/scheduler:/app/track_b/scheduler:ro
-      - ${OMNI_DECODER_VISION_MODEL_PATH:-models/track_b/vd}/transformer:/app/track_b/transformer:ro
-      - ${OMNI_DECODER_VISION_MODEL_PATH:-models/track_b/vd}/transformer2:/app/track_b/transformer2:ro
-      - ${OMNI_DECODER_VISION_MODEL_PATH:-models/track_b/vd}/vae:/app/track_b/vae:ro
-      - ${OMNI_DECODER_VISION_MODEL_PATH:-models/track_b/vd}/token_embedder:/app/track_b/token_embedder:ro
-      - ${OMNI_DECODER_VISION_MODEL_PATH:-models/track_b/vd}/model_index.json:/app/track_b/model_index.json:ro
+      - ${OMNI_DECODER_VISION_MODEL_PATH:-models/track_b/vd/HyperCLOVAX-SEED-Omni-8B}/scheduler:/app/track_b/scheduler:ro
+      - ${OMNI_DECODER_VISION_MODEL_PATH:-models/track_b/vd/HyperCLOVAX-SEED-Omni-8B}/transformer:/app/track_b/transformer:ro
+      - ${OMNI_DECODER_VISION_MODEL_PATH:-models/track_b/vd/HyperCLOVAX-SEED-Omni-8B}/transformer2:/app/track_b/transformer2:ro
+      - ${OMNI_DECODER_VISION_MODEL_PATH:-models/track_b/vd/HyperCLOVAX-SEED-Omni-8B}/vae:/app/track_b/vae:ro
+      - ${OMNI_DECODER_VISION_MODEL_PATH:-models/track_b/vd/HyperCLOVAX-SEED-Omni-8B}/token_embedder:/app/track_b/token_embedder:ro
+      - ${OMNI_DECODER_VISION_MODEL_PATH:-models/track_b/vd/HyperCLOVAX-SEED-Omni-8B}/model_index.json:/app/track_b/model_index.json:ro
     container_name: omni-decoder-vision-api
     environment:
       - NCP_S3_ENDPOINT=${NCP_S3_ENDPOINT:-http://minio:9000}
@@ -209,7 +209,7 @@ services:
       "--ts-config", "/app/config.properties"
     ]
     volumes:
-      - ${OMNI_DECODER_AUDIO_TORCHSERVE_MODEL_PATH:-models/track_b/ad}:/workspace/models:ro
+      - ${OMNI_DECODER_AUDIO_TORCHSERVE_MODEL_PATH:-models/track_b/ad/HyperCLOVAX-SEED-Omni-8B}:/workspace/models:ro
       - ./OmniServe/decoder/audio/codec/config.properties:/app/config.properties:ro
     environment:
       - JAVA_HOME=/usr/lib/jvm/java-11-openjdk-arm64
