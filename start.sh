@@ -53,6 +53,14 @@ if [[ -f "$ROOT_DIR/patches/omniserv.clean.patch" ]]; then
   "$ROOT_DIR/scripts/apply_omniserv_patch.sh"
 fi
 
+# Ensure vision decoder requirements file exists (some upstreams only ship requirements.txt).
+REQ_MIN="$ROOT_DIR/OmniServe/decoder/vision/track_b/requirements.min.txt"
+REQ_FULL="$ROOT_DIR/OmniServe/decoder/vision/track_b/requirements.txt"
+if [[ ! -f "$REQ_MIN" ]] && [[ -f "$REQ_FULL" ]]; then
+  echo "[INFO] requirements.min.txt missing; copying from requirements.txt"
+  cp "$REQ_FULL" "$REQ_MIN"
+fi
+
 # Download model if missing
 if [[ ! -d "$RAW_LLM_DIR" ]]; then
   echo "[INFO] Raw model not found at $RAW_LLM_DIR"
