@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-PATCH_FILE="${1:-./patches/omniserv.patch}"
+PATCH_FILE="${1:-./patches/omniserv.clean.patch}"
 SUBMODULE_DIR="${2:-./OmniServe}"
 
 if [[ ! -f "$PATCH_FILE" ]]; then
@@ -14,7 +14,7 @@ if [[ ! -d "$SUBMODULE_DIR" ]]; then
   exit 1
 fi
 
-# Apply patch from repo root
+# Apply patch from repo root (a/ b/ style paths)
 patch -p1 -d "$SUBMODULE_DIR" < "$PATCH_FILE"
 
 echo "Applied patch to $SUBMODULE_DIR"

@@ -190,7 +190,7 @@ If you want to regenerate the patch later:
 
 ```
 # assuming you have a clean submodule and a modified OmniServe copy
-# diff -ruN OmniServe OmniServe.modified > patches/omniserv.patch
+# diff -ruN OmniServe OmniServe.modified > patches/omniserv.clean.patch
 ```
 
 ---
