@@ -121,7 +121,7 @@ fi
 
 if [[ "$READY" -eq 1 ]]; then
   echo "[INFO] OmniServe is healthy."
-  echo "[INFO] Test chat: ./scripts/test_chat.sh"
+  echo "[INFO] (Suggestion) Test chat: ./scripts/test_chat.sh"
 else
   echo "[WARN] Timed out waiting for health. Check logs:"
   echo "  docker compose -f docker-compose.track-b.yaml logs -f omni"
