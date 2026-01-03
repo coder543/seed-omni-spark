@@ -21,6 +21,8 @@ const AUDIO_TORCHSERVE_ENDPOINT =
   'http://omni-decoder-audio-torchserve:8081/predictions/NCCosybigvganDecoder';
 const AUDIO_TORCHSERVE_SPEAKER = process.env.AUDIO_TORCHSERVE_SPEAKER || 'fkms';
 const AUDIO_TOKEN_CHUNK_SIZE = Number(process.env.AUDIO_TOKEN_CHUNK_SIZE || 150);
+const VISION_DECODER_ENDPOINT =
+  process.env.VISION_DECODER_ENDPOINT || 'http://omni-decoder-vision-api:10063/decode';
 const S3_ENDPOINT = process.env.NCP_S3_ENDPOINT;
 const S3_REGION = process.env.NCP_S3_REGION || 'us-east-1';
 const S3_ACCESS_KEY = process.env.NCP_S3_ACCESS_KEY;
@@ -29,6 +31,7 @@ const S3_BUCKET = process.env.NCP_S3_BUCKET_NAME;
 const S3_FORCE_PATH_STYLE = (process.env.S3_FORCE_PATH_STYLE || '1') !== '0';
 const MODEL_ID = 'naver-hyperclovax/HyperCLOVAX-SEED-Omni-8B';
 const OMNI_MODEL_ID = 'track_b_model';
+const IMAGE_DEBUG = process.env.IMAGE_DEBUG === '1';
 
 const s3Enabled = Boolean(S3_ENDPOINT && S3_ACCESS_KEY && S3_SECRET_KEY && S3_BUCKET);
 const s3 = s3Enabled
@@ -147,6 +150,14 @@ app.get('/v1/models', (_req, res) => {
 app.post('/v1/chat/completions', express.json({ limit: '50mb' }), async (req, res) => {
   try {
     const body = req.body || {};
+    if (IMAGE_DEBUG) {
+      console.log('[image] request', {
+        stream: body.stream,
+        hasTools: Array.isArray(body.tools) && body.tools.length > 0,
+        hasExtraBody: !!body.extra_body,
+        skipReasoning: body?.extra_body?.chat_template_kwargs?.skip_reasoning === true
+      });
+    }
     if (body.model === MODEL_ID) {
       body.model = OMNI_MODEL_ID;
     }
@@ -168,6 +179,7 @@ app.post('/v1/chat/completions', express.json({ limit: '50mb' }), async (req, re
         }
       }
     }
+
     const upstream = await fetch(`${OMNI_BASE}/b/v1/chat/completions`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -270,6 +282,12 @@ async function transformSseToBase64(raw) {
     }
   }
 
+  const extracted = extractThinkBlocks(content);
+  if (extracted) {
+    content = extracted.content ?? content;
+    if (extracted.reasoning) reasoning += extracted.reasoning;
+  }
+
   const payload = {
     id: `chatcmpl-${crypto.randomUUID().replace(/-/g, '')}`,
     object: 'chat.completion',
@@ -289,6 +307,12 @@ async function transformSseToBase64(raw) {
     ]
   };
 
+  if (toolCalls?.length) {
+    if (IMAGE_DEBUG) {
+      console.log('[image] non-stream tool_calls collected', JSON.stringify(toolCalls));
+    }
+    await resolveVisionToolCalls(toolCalls);
+  }
   const transformed = await transformCompletionToBase64(payload);
   return `data: ${JSON.stringify({
     id: transformed.id,
@@ -324,17 +348,128 @@ async function streamSseWithTransform(upstream, res, options = {}) {
   let audio = undefined;
   let sentAudio = false;
   let audioTokenDetected = false;
+  let doneSeen = false;
   let prefixBuffer = '';
   let fullContent = '';
+  let thinkCarry = '';
+  let thinkInProgress = false;
+  let audioTokenBuffer = [];
+  let audioPcmChunks = [];
+  let audioSpec = null;
+  let audioDecodeFailed = false;
+  let audioDecodeQueue = Promise.resolve();
+  const audioChunkSize =
+    Number.isFinite(AUDIO_TOKEN_CHUNK_SIZE) && AUDIO_TOKEN_CHUNK_SIZE > 0
+      ? AUDIO_TOKEN_CHUNK_SIZE
+      : 150;
+
+  const queueAudioDecode = (chunkTokens) => {
+    audioDecodeQueue = audioDecodeQueue.then(async () => {
+      if (audioDecodeFailed || chunkTokens.length < 3) return;
+      const wavBuf = await fetchTorchserveWav(chunkTokens, extractSpeakerId(fullContent) || AUDIO_TORCHSERVE_SPEAKER);
+      if (!wavBuf) {
+        audioDecodeFailed = true;
+        return;
+      }
+      emitAudioDelta(res, meta, { format: 'audio/wav', data: wavBuf.toString('base64') });
+      const parsed = parseWav(wavBuf);
+      if (!parsed) {
+        audioDecodeFailed = true;
+        return;
+      }
+      if (!audioSpec) {
+        audioSpec = parsed;
+      }
+      audioPcmChunks.push(parsed.data);
+    });
+  };
+
+  const enqueueAudioTokens = (newTokens) => {
+    if (!newTokens || newTokens.length === 0) return;
+    audioTokenBuffer.push(...newTokens);
+    while (audioTokenBuffer.length >= audioChunkSize) {
+      const chunk = audioTokenBuffer.splice(0, audioChunkSize);
+      queueAudioDecode(chunk);
+    }
+  };
   const meta = {
     id: undefined,
     created: undefined,
     model: undefined
   };
 
+  const startThinkTag = '<think>';
+  const endThinkTag = '</think>';
+
+  const splitThinkSegments = (input) => {
+    let text = `${thinkCarry}${input}`;
+    thinkCarry = '';
+    const segments = [];
+
+    while (text.length > 0) {
+      if (thinkInProgress) {
+        const endIdx = text.indexOf(endThinkTag);
+        if (endIdx === -1) {
+          const keep = endThinkTag.length - 1;
+          if (text.length >= keep) {
+            const emit = text.slice(0, text.length - keep);
+            if (emit) segments.push({ type: 'reasoning', text: emit });
+            thinkCarry = text.slice(text.length - keep);
+          } else {
+            thinkCarry = text;
+          }
+          return segments;
+        }
+        const emit = text.slice(0, endIdx);
+        if (emit) segments.push({ type: 'reasoning', text: emit });
+        text = text.slice(endIdx + endThinkTag.length);
+        thinkInProgress = false;
+      } else {
+        const startIdx = text.indexOf(startThinkTag);
+        if (startIdx === -1) {
+          const keep = startThinkTag.length - 1;
+          if (text.length >= keep) {
+            const emit = text.slice(0, text.length - keep);
+            if (emit) segments.push({ type: 'content', text: emit });
+            thinkCarry = text.slice(text.length - keep);
+          } else {
+            thinkCarry = text;
+          }
+          return segments;
+        }
+        const emit = text.slice(0, startIdx);
+        if (emit) segments.push({ type: 'content', text: emit });
+        text = text.slice(startIdx + startThinkTag.length);
+        thinkInProgress = true;
+      }
+    }
+    return segments;
+  };
+
+  const emitSegments = (parsed, segments) => {
+    for (const segment of segments) {
+      const cloned = JSON.parse(JSON.stringify(parsed));
+      if (cloned?.choices?.[0]?.delta) {
+        if (segment.type === 'reasoning') {
+          delete cloned.choices[0].delta.content;
+          cloned.choices[0].delta.reasoning_content = segment.text;
+        } else {
+          cloned.choices[0].delta.content = segment.text;
+        }
+      }
+      res.write(`data: ${JSON.stringify(cloned)}\n\n`);
+    }
+  };
+
   const flushExtras = async () => {
     const audioForFlush = sentAudio ? undefined : audio;
     if ((!toolCalls || toolCalls.length === 0) && !audioForFlush) return;
+    if (toolCalls?.length) {
+      if (IMAGE_DEBUG) {
+        console.log('[image] stream tool_calls collected', JSON.stringify(toolCalls));
+      }
+      await resolveVisionToolCalls(toolCalls);
+    }
     const payload = {
       id: meta.id || `chatcmpl-${crypto.randomUUID().replace(/-/g, '')}`,
       object: 'chat.completion',
@@ -357,12 +492,15 @@ async function streamSseWithTransform(upstream, res, options = {}) {
       tool_calls: transformed.choices[0]?.message?.tool_calls,
       audio: transformed.choices[0]?.message?.audio
     };
-    if (!delta.tool_calls && !delta.audio) return;
-    const chunk = {
-      id: transformed.id,
-      object: 'chat.completion.chunk',
-      created: transformed.created,
-      model: transformed.model,
+    if (IMAGE_DEBUG && delta.tool_calls) {
+      console.log('[image] stream tool_calls final', JSON.stringify(delta.tool_calls));
+    }
+      if (!delta.tool_calls && !delta.audio) return;
+      const chunk = {
+        id: transformed.id,
+        object: 'chat.completion.chunk',
+        created: transformed.created,
+        model: transformed.model,
       choices: [{ index: 0, delta }]
     };
     res.write(`data: ${JSON.stringify(chunk)}\n\n`);
@@ -380,6 +518,7 @@ async function streamSseWithTransform(upstream, res, options = {}) {
           const data = line.slice(6).trim();
           if (!data) continue;
           if (data === '[DONE]') {
+            doneSeen = true;
             await flushExtras();
             res.write('data: [DONE]\n\n');
             continue;
@@ -398,32 +537,35 @@ async function streamSseWithTransform(upstream, res, options = {}) {
                 if (audioIdx !== -1) {
                   audioTokenDetected = true;
                   const before = combined.slice(0, audioIdx);
-                  const cleaned = stripTranscriptTags(before);
+                  const after = combined.slice(audioIdx);
+                const cleaned = stripTranscriptTags(before);
                   if (cleaned) {
-                    const cloned = JSON.parse(JSON.stringify(parsed));
-                    if (cloned?.choices?.[0]?.delta) {
-                      cloned.choices[0].delta.content = cleaned;
-                    }
-                    res.write(`data: ${JSON.stringify(cloned)}\n\n`);
+                    const segments = splitThinkSegments(cleaned);
+                    if (segments.length > 0) emitSegments(parsed, segments);
                   }
                   prefixBuffer = '';
+                  const tokens = extractAudioTokensFromText(after);
+                  enqueueAudioTokens(tokens);
                 } else {
                   const safeLength = Math.max(0, combined.length - 6);
                   const emit = combined.slice(0, safeLength);
                   prefixBuffer = combined.slice(safeLength);
                   const cleaned = stripTranscriptTags(emit);
                   if (cleaned) {
-                    const cloned = JSON.parse(JSON.stringify(parsed));
-                    if (cloned?.choices?.[0]?.delta) {
-                      cloned.choices[0].delta.content = cleaned;
-                    }
-                    res.write(`data: ${JSON.stringify(cloned)}\n\n`);
+                    const segments = splitThinkSegments(cleaned);
+                    if (segments.length > 0) emitSegments(parsed, segments);
                   }
                 }
+              } else {
+                const tokens = extractAudioTokensFromText(delta.content);
+                enqueueAudioTokens(tokens);
               }
             }
             if (delta?.tool_calls) {
               toolCalls = mergeToolCalls(toolCalls, delta.tool_calls);
+              if (IMAGE_DEBUG) {
+                console.log('[image] stream tool_call delta', JSON.stringify(delta.tool_calls));
+              }
             }
             if (delta?.audio) {
               audio = await normalizeAudioDelta(delta.audio);
@@ -458,40 +600,69 @@ async function streamSseWithTransform(upstream, res, options = {}) {
       }
     }
   } finally {
-    if (!audioTokenDetected && prefixBuffer) {
-      const cleaned = stripTranscriptTags(prefixBuffer);
+    if (!audioTokenDetected) {
+      const tail = prefixBuffer;
+      const cleaned = stripTranscriptTags(tail);
       if (cleaned) {
-        const chunk = {
-          id: meta.id || `chatcmpl-${crypto.randomUUID().replace(/-/g, '')}`,
-          object: 'chat.completion.chunk',
-          created: meta.created || Math.floor(Date.now() / 1000),
-          model: meta.model || 'track_b_model',
-          choices: [{ index: 0, delta: { content: cleaned } }]
-        };
-        res.write(`data: ${JSON.stringify(chunk)}\n\n`);
-      }
-    }
-    if (audioTokenDetected && !audio) {
-      const speaker = extractSpeakerId(fullContent) || AUDIO_TORCHSERVE_SPEAKER;
-      const tokens = extractAudioTokens(fullContent);
-      if (tokens.length > 0) {
-        const decoded = await decodeAudioTokens(
-          tokens,
-          options.audioFormat || AUDIO_DEFAULT_FORMAT,
-          speaker
-        );
-        if (decoded) {
-          audio = decoded;
+        const segments = splitThinkSegments(cleaned);
+        if (segments.length > 0) {
+          emitSegments(
+            {
+              id: meta.id || `chatcmpl-${crypto.randomUUID().replace(/-/g, '')}`,
+              object: 'chat.completion.chunk',
+              created: meta.created || Math.floor(Date.now() / 1000),
+              model: meta.model || 'track_b_model',
+              choices: [{ index: 0, delta: { content: '' } }]
+            },
+            segments
+          );
         }
       }
     }
-    await flushExtras();
+    if (audioTokenDetected && !audio) {
+      if (audioTokenBuffer.length > 0) {
+        const remaining = audioTokenBuffer.splice(0, audioTokenBuffer.length);
+        queueAudioDecode(remaining);
+      }
+      try {
+        await audioDecodeQueue;
+      } catch {
+        audioDecodeFailed = true;
+      }
+      if (!audioDecodeFailed && audioPcmChunks.length > 0 && audioSpec) {
+        const combined = Buffer.concat(audioPcmChunks);
+        const wavOut = buildWavFromPcm(
+          combined,
+          audioSpec.sampleRate,
+          audioSpec.numChannels,
+          audioSpec.bitsPerSample
+        );
+        audio = { format: 'audio/wav', data: wavOut.toString('base64') };
+      }
+    }
+    if (!doneSeen) {
+      await flushExtras();
+    }
     res.end();
   }
 }
 
 async function transformCompletionToBase64(data) {
   const message = data?.choices?.[0]?.message;
+  if (IMAGE_DEBUG && message?.tool_calls?.length) {
+    console.log('[image] non-stream tool_calls received', JSON.stringify(message.tool_calls));
+  }
+  if (message?.content) {
+    const extracted = extractThinkBlocks(message.content);
+    if (extracted) {
+      if (extracted.content !== undefined) message.content = extracted.content;
+      if (extracted.reasoning) {
+        message.reasoning_content = message.reasoning_content
+          ? `${message.reasoning_content}${extracted.reasoning}`
+          : extracted.reasoning;
+      }
+    }
+  }
   if (message?.tool_calls?.length) {
     for (const call of message.tool_calls) {
       if (call?.function?.name !== 't2i_model_generation') continue;
@@ -502,12 +673,37 @@ async function transformCompletionToBase64(data) {
       } catch {
         args = undefined;
       }
-      const token = args?.discrete_image_token;
+      let token = args?.discrete_image_token;
+      if (typeof token === 'string' && token.trim().startsWith('data:')) {
+        const normalized = normalizeImageDataUrl(token);
+        if (normalized && normalized !== token) {
+          args.discrete_image_token = normalized;
+          call.function.arguments = JSON.stringify(args);
+          token = normalized;
+          if (IMAGE_DEBUG) console.log('[image] normalized data url mime');
+        }
+      }
       if (typeof token === 'string' && !token.trim().startsWith('data:')) {
+        if (looksLikeVisionTokens(token)) {
+          if (IMAGE_DEBUG) {
+            console.log('[image] decoding vision tokens (non-stream)', {
+              length: token.length,
+              preview: token.slice(0, 120)
+            });
+          }
+          const decoded = await decodeVisionTokensToUrl(token);
+          if (decoded) {
+            args.discrete_image_token = decoded;
+            call.function.arguments = JSON.stringify(args);
+            token = decoded;
+            if (IMAGE_DEBUG) console.log('[image] decoded vision tokens -> url', decoded);
+          }
+        }
         const dataUrl = await fetchAsDataUrl(token);
         if (dataUrl) {
           args.discrete_image_token = dataUrl;
           call.function.arguments = JSON.stringify(args);
+          if (IMAGE_DEBUG) console.log('[image] fetched data url (non-stream)', dataUrl.slice(0, 80));
         }
       }
     }
@@ -581,7 +777,7 @@ function extractAudioTokens(content) {
   return tokens;
 }
 
-async function decodeAudioTokens(tokens, format, speaker) {
+async function decodeAudioTokens(tokens, format, speaker, onChunk) {
   if (!AUDIO_TORCHSERVE_ENDPOINT || tokens.length < 3) {
     console.warn('audio-decode: missing endpoint or too few tokens', {
       hasEndpoint: Boolean(AUDIO_TORCHSERVE_ENDPOINT),
@@ -607,6 +803,9 @@ async function decodeAudioTokens(tokens, format, speaker) {
       console.warn('audio-decode: torchserve chunk failed', { index: i, size: chunk.length });
       return undefined;
     }
+    if (onChunk) {
+      await onChunk({ format: 'audio/wav', data: wavBuf.toString('base64') });
+    }
     const parsed = parseWav(wavBuf);
     if (!parsed) {
       console.warn('audio-decode: failed to parse wav chunk');
@@ -624,6 +823,18 @@ async function decodeAudioTokens(tokens, format, speaker) {
   return { format: 'audio/wav', data: wavOut.toString('base64') };
 }
 
+function extractAudioTokensFromText(content) {
+  const tokens = [];
+  if (!content) return tokens;
+  const re = /<\|audio(\d+)\|>/g;
+  let match;
+  while ((match = re.exec(content)) !== null) {
+    const val = Number(match[1]);
+    if (!Number.isNaN(val)) tokens.push(val);
+  }
+  return tokens;
+}
+
 function mergeToolCalls(existing, deltas) {
   const result = Array.isArray(existing) ? [...existing] : [];
   for (const delta of deltas || []) {
@@ -637,8 +848,68 @@ function mergeToolCalls(existing, deltas) {
         ...(delta.function || {})
       }
     };
+    if (delta?.function?.arguments) {
+      const prev = result[index]?.function?.arguments || '';
+      const next = delta.function.arguments;
+      if (typeof next === 'string' && next.trim().startsWith('{')) {
+        result[index].function.arguments = next;
+      } else {
+        result[index].function.arguments = `${prev}${next}`;
+      }
+    }
   }
   return result;
+}
+
+async function resolveVisionToolCalls(toolCalls) {
+  if (!Array.isArray(toolCalls)) return;
+  for (const call of toolCalls) {
+    if (call?.function?.name !== 't2i_model_generation') continue;
+    const argsRaw = call?.function?.arguments;
+    let args;
+    try {
+      args = typeof argsRaw === 'string' ? JSON.parse(argsRaw) : argsRaw;
+    } catch {
+      args = undefined;
+    }
+    const token = args?.discrete_image_token;
+    if (typeof token !== 'string') continue;
+    if (token.trim().startsWith('data:')) continue;
+    if (!looksLikeVisionTokens(token)) continue;
+    if (IMAGE_DEBUG) {
+      console.log('[image] resolve vision token', {
+        length: token.length,
+        preview: token.slice(0, 120)
+      });
+    }
+    const decoded = await decodeVisionTokensToUrl(token);
+    if (!decoded) {
+      if (IMAGE_DEBUG) console.log('[image] vision decode failed');
+      continue;
+    }
+    args.discrete_image_token = decoded;
+    call.function.arguments = JSON.stringify(args);
+    if (IMAGE_DEBUG) console.log('[image] vision decode url', decoded);
+  }
+}
+
+function emitAudioDelta(res, meta, audioObj) {
+  if (!audioObj?.data) return;
+  const payload = {
+    id: meta.id || `chatcmpl-${crypto.randomUUID().replace(/-/g, '')}`,
+    object: 'chat.completion.chunk',
+    created: meta.created || Math.floor(Date.now() / 1000),
+    model: meta.model || 'track_b_model',
+    choices: [
+      {
+        index: 0,
+        delta: {
+          audio: audioObj
+        }
+      }
+    ]
+  };
+  res.write(`data: ${JSON.stringify(payload)}\n\n`);
 }
 
 async function fetchAsDataUrl(url, hintFormat) {
@@ -691,6 +962,60 @@ function decodeBase64ToString(data) {
   }
 }
 
+function looksLikeVisionTokens(token) {
+  if (!token) return false;
+  return (
+    token.includes('<|discrete_image_start|>') ||
+    token.includes('<|vision_ratio_') ||
+    token.includes('<|vision')
+  );
+}
+
+function extractThinkBlocks(text) {
+  if (!text) return undefined;
+  const startTag = '<think>';
+  const endTag = '</think>';
+  let content = '';
+  let reasoning = '';
+  let idx = 0;
+
+  while (idx < text.length) {
+    const startIdx = text.indexOf(startTag, idx);
+    if (startIdx === -1) {
+      content += text.slice(idx);
+      break;
+    }
+    content += text.slice(idx, startIdx);
+    const afterStart = startIdx + startTag.length;
+    const endIdx = text.indexOf(endTag, afterStart);
+    if (endIdx === -1) {
+      reasoning += text.slice(afterStart);
+      return { content, reasoning: reasoning || undefined };
+    }
+    reasoning += text.slice(afterStart, endIdx);
+    idx = endIdx + endTag.length;
+  }
+
+  return { content, reasoning: reasoning || undefined };
+}
+
+function normalizeImageDataUrl(dataUrl) {
+  const parsed = parseDataUrl(dataUrl);
+  if (!parsed) return undefined;
+  if (parsed.mime.startsWith('image/')) return dataUrl;
+  const header = parsed.data.slice(0, 32);
+  let mime = undefined;
+  if (header.startsWith('iVBORw0K')) {
+    mime = 'image/png';
+  } else if (header.startsWith('/9j/')) {
+    mime = 'image/jpeg';
+  } else if (header.startsWith('UklGR')) {
+    mime = 'image/webp';
+  }
+  if (!mime) return undefined;
+  return `data:${mime};base64,${parsed.data}`;
+}
+
 function parseDataUrl(dataUrl) {
   const match = /^data:([^;]+);base64,(.*)$/.exec(dataUrl);
   if (!match) return undefined;
@@ -724,6 +1049,30 @@ function extractSpeakerId(content) {
     }
   }
   return undefined;
+}
+
+async function decodeVisionTokensToUrl(token) {
+  try {
+    const resp = await fetch(VISION_DECODER_ENDPOINT, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        vlm_output: token,
+        height: null,
+        width: null,
+        num_inference_steps: 30,
+        seed: null,
+        upload_to_s3: true,
+        s3_prefix: 'vision-decoder',
+        s3_expiration: 3600
+      })
+    });
+    if (!resp.ok) return undefined;
+    const data = await resp.json();
+    return data?.presigned_url || data?.s3_path || undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 async function fetchTorchserveWav(units, speaker) {

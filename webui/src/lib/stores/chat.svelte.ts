@@ -17,6 +17,83 @@ import { SvelteMap } from 'svelte/reactivity';
 import { DEFAULT_CONTEXT } from '$lib/constants/default-context';
 import { AttachmentType } from '$lib/enums';
 
+class StreamingAudioPlayer {
+	private context: AudioContext | null;
+	private nextStartTime = 0;
+	private queue = Promise.resolve();
+
+	constructor() {
+		this.context = new AudioContext();
+	}
+
+	enqueue(base64Data: string): void {
+		this.queue = this.queue
+			.then(() => this.decodeAndPlay(base64Data))
+			.catch((error) => {
+				console.warn('Streaming audio decode failed:', error);
+			});
+	}
+
+	stop(): void {
+		if (this.context) {
+			this.context.close().catch(() => undefined);
+			this.context = null;
+		}
+		this.nextStartTime = 0;
+	}
+
+	private async decodeAndPlay(base64Data: string): Promise<void> {
+		if (!this.context) return;
+		if (this.context.state === 'suspended') {
+			try {
+				await this.context.resume();
+			} catch {
+				// ignore resume failures (autoplay policies)
+			}
+		}
+		const audioBuffer = await this.context.decodeAudioData(this.base64ToArrayBuffer(base64Data));
+		const source = this.context.createBufferSource();
+		source.buffer = audioBuffer;
+		source.connect(this.context.destination);
+		const startTime = Math.max(this.context.currentTime, this.nextStartTime);
+		source.start(startTime);
+		this.nextStartTime = startTime + audioBuffer.duration;
+	}
+
+	private base64ToArrayBuffer(data: string): ArrayBuffer {
+		const binary = atob(data);
+		const len = binary.length;
+		const bytes = new Uint8Array(len);
+		for (let i = 0; i < len; i++) {
+			bytes[i] = binary.charCodeAt(i);
+		}
+		return bytes.buffer;
+	}
+}
+
+const MAX_STREAMING_AUDIO_BASE64 = 400000;
+const IMAGE_GENERATION_TOOL_SCHEMA = [
+	{
+		type: 'function',
+		function: {
+			name: 't2i_model_generation',
+			description: 'Generates an RGB image based on the provided discrete image representation.',
+			parameters: {
+				type: 'object',
+				required: ['discrete_image_token'],
+				properties: {
+					discrete_image_token: {
+						type: 'string',
+						description:
+							'A serialized string of discrete vision tokens, encapsulated by special tokens. The format must be strictly followed: <|discrete_image_start|><|vision_ratio_4:3|><|vision_token|><|visionaaaaa|><|visionbbbbb|>... <|visionzzzzz|><|vision_eol|><|vision_eof|><|discrete_image_end|>.',
+						minLength: 1
+					}
+				}
+			}
+		}
+	}
+];
+
 /**
  * chatStore - Active AI interaction and streaming state management
  *
@@ -73,10 +150,12 @@ class ChatStore {
 	chatStreamingStates = new SvelteMap<string, { response: string; messageId: string }>();
 	private abortControllers = new SvelteMap<string, AbortController>();
 	private processingStates = new SvelteMap<string, ApiProcessingState | null>();
+	private streamingAudioPlayers = new SvelteMap<string, StreamingAudioPlayer>();
 	private activeConversationId = $state<string | null>(null);
 	private isStreamingActive = $state(false);
 	private isEditModeActive = $state(false);
 	private addFilesHandler: ((files: File[]) => void) | null = $state(null);
+	private imageToolsEnabled = $state(false);
 
 	// ─────────────────────────────────────────────────────────────────────────────
 	// Loading State
@@ -104,6 +183,24 @@ class ChatStore {
 	private clearChatStreaming(convId: string): void {
 		this.chatStreamingStates.delete(convId);
 		if (conversationsStore.activeConversation?.id === convId) this.currentResponse = '';
+	}
+
+	private enqueueStreamingAudio(convId: string, base64Data: string): void {
+		if (!base64Data) return;
+		let player = this.streamingAudioPlayers.get(convId);
+		if (!player) {
+			player = new StreamingAudioPlayer();
+			this.streamingAudioPlayers.set(convId, player);
+		}
+		player.enqueue(base64Data);
+	}
+
+	private stopStreamingAudio(convId: string): void {
+		const player = this.streamingAudioPlayers.get(convId);
+		if (player) {
+			player.stop();
+			this.streamingAudioPlayers.delete(convId);
+		}
 	}
 
 	private getChatStreaming(convId: string): { response: string; messageId: string } | undefined {
@@ -541,6 +638,11 @@ class ChatStore {
 					const idx = conversationsStore.findMessageIndex(assistantMessage.id);
 					conversationsStore.updateMessageAtIndex(idx, { toolCalls: streamedToolCallContent });
 				},
+				onAudioChunk: (base64Data: string, mimeType?: string) => {
+					if (!mimeType?.includes('wav')) return;
+					if (base64Data.length > MAX_STREAMING_AUDIO_BASE64) return;
+					this.enqueueStreamingAudio(assistantMessage.convId, base64Data);
+				},
 				onModel: (modelName: string) => recordModel(modelName),
 				onTimings: (timings?: ChatMessageTimings, promptProgress?: ChatMessagePromptProgress) => {
 					const tokensPerSecond =
@@ -567,11 +669,15 @@ class ChatStore {
 					audioUrl?: string
 				) => {
 					this.stopStreaming();
+					this.stopStreamingAudio(assistantMessage.convId);
 
 					const assistantExtras = this.buildAssistantExtras(
 						toolCallContent || streamedToolCallContent,
 						audioUrl
 					);
+					if (assistantExtras?.length) {
+						console.log('[image-ui] assistantExtras', assistantExtras);
+					}
 
 					const updateData: Record<string, unknown> = {
 						content: finalContent || streamedContent,
@@ -608,6 +714,7 @@ class ChatStore {
 				},
 				onError: (error: Error) => {
 					this.stopStreaming();
+					this.stopStreamingAudio(assistantMessage.convId);
 
 					if (this.isAbortError(error)) {
 						this.setChatLoading(assistantMessage.convId, false);
@@ -733,26 +840,49 @@ class ChatStore {
 	): DatabaseMessageExtra[] | undefined {
 		const extras: DatabaseMessageExtra[] = [];
 
+		const parseToolCallArgs = (raw: string): Record<string, unknown> | undefined => {
+			try {
+				return JSON.parse(raw);
+			} catch {
+				const marker = '{"discrete_image_token"';
+				const idx = raw.lastIndexOf(marker);
+				if (idx !== -1) {
+					const candidate = raw.slice(idx);
+					try {
+						return JSON.parse(candidate);
+					} catch {
+						return undefined;
+					}
+				}
+				return undefined;
+			}
+		};
+
 		if (toolCallContent) {
+			if (toolCallContent.includes('t2i_model_generation')) {
+				console.log('[image-ui] toolCallContent length', toolCallContent.length);
+			}
 			try {
 				const parsed = JSON.parse(toolCallContent);
 				if (Array.isArray(parsed)) {
+					console.log('[image-ui] parsed tool_calls', parsed.length);
 					for (const call of parsed) {
 						const fnName = call?.function?.name;
+						console.log('[image-ui] tool_call fn', fnName);
 						if (fnName !== 't2i_model_generation') continue;
 						const argsRaw = call?.function?.arguments;
 						if (!argsRaw) continue;
+						console.log('[image-ui] tool_call args type', typeof argsRaw);
 						let args: Record<string, unknown> | undefined;
 						if (typeof argsRaw === 'string') {
-							try {
-								args = JSON.parse(argsRaw);
-							} catch {
-								args = undefined;
-							}
+							args = parseToolCallArgs(argsRaw);
 						} else if (typeof argsRaw === 'object' && argsRaw) {
 							args = argsRaw;
 						}
 						const token = args?.discrete_image_token;
+						if (typeof token === 'string') {
+							console.log('[image-ui] token preview', token.slice(0, 40), token.length);
+						}
 						if (typeof token === 'string') {
 							if (token.trim().startsWith('data:')) {
 								const parsedData = this.parseDataUrl(token);
@@ -763,6 +893,7 @@ class ChatStore {
 										name,
 										base64Url: token
 									});
+									console.log('[image-ui] added image attachment', name, parsedData.mime);
 								}
 							} else if (this.isLikelyUrl(token)) {
 								const name = this.filenameFromUrl(token, 'generated-image');
@@ -771,11 +902,15 @@ class ChatStore {
 									name,
 									url: token
 								});
+								console.log('[image-ui] added image attachment url', name);
 							}
 						}
 					}
+				} else {
+					console.log('[image-ui] tool_calls parsed non-array', Object.keys(parsed ?? {}));
 				}
 			} catch {
+				console.warn('[image-ui] failed to parse toolCallContent');
 				// ignore malformed tool calls
 			}
 		}
@@ -860,6 +995,7 @@ class ChatStore {
 		await this.savePartialResponseIfNeeded(convId);
 
 		this.stopStreaming();
+		this.stopStreamingAudio(convId);
 		this.abortRequest(convId);
 		this.setChatLoading(convId, false);
 		this.clearChatStreaming(convId);
@@ -1548,6 +1684,14 @@ class ChatStore {
 		this.addFilesHandler = handler;
 	}
 
+	setImageToolsEnabled(enabled: boolean): void {
+		this.imageToolsEnabled = enabled;
+	}
+
+	getImageToolsEnabled(): boolean {
+		return this.imageToolsEnabled;
+	}
+
 	// ─────────────────────────────────────────────────────────────────────────────
 	// Utilities
 	// ─────────────────────────────────────────────────────────────────────────────
@@ -1568,6 +1712,8 @@ class ChatStore {
 		// Config options needed by ChatService
 		if (currentConfig.systemMessage) apiOptions.systemMessage = currentConfig.systemMessage;
 		if (currentConfig.disableReasoningFormat) apiOptions.disableReasoningFormat = true;
+		if (this.imageToolsEnabled) apiOptions.tools = IMAGE_GENERATION_TOOL_SCHEMA;
+		apiOptions.extra_body = { chat_template_kwargs: { skip_reasoning: true } };
 
 		if (hasValue(currentConfig.temperature))
 			apiOptions.temperature = Number(currentConfig.temperature);
@@ -1620,6 +1766,9 @@ export const getChatStreaming = (convId: string) => chatStore.getChatStreamingPu
 export const isChatLoading = (convId: string) => chatStore.isChatLoadingPublic(convId);
 export const isChatStreaming = () => chatStore.isStreaming();
 export const isEditing = () => chatStore.isEditing();
+export const imageToolsEnabled = () => chatStore.getImageToolsEnabled();
+export const setImageToolsEnabled = (enabled: boolean) =>
+	chatStore.setImageToolsEnabled(enabled);
 export const isLoading = () => chatStore.isLoading;
 export const setEditModeActive = (handler: (files: File[]) => void) =>
 	chatStore.setEditModeActive(handler);

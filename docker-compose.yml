@@ -271,6 +271,8 @@ services:
       - OMNI_BASE=http://omni-chainer:8000
       - PORT=${WEBUI_PORT:-3000}
       - MINIO_ENDPOINT=http://minio:9000
+      - AUDIO_TOKEN_CHUNK_SIZE=50
+      - IMAGE_DEBUG=${IMAGE_DEBUG:-0}
       - NCP_S3_ENDPOINT=${NCP_S3_ENDPOINT}
       - NCP_S3_REGION=${NCP_S3_REGION}
       - NCP_S3_ACCESS_KEY=${NCP_S3_ACCESS_KEY}

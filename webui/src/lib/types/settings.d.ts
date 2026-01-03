@@ -18,6 +18,10 @@ export interface SettingsChatServiceOptions {
 	model?: string;
 	// System message to inject
 	systemMessage?: string;
+	// Tools to include with the request
+	tools?: unknown[];
+	// Extra body for server-specific parameters
+	extra_body?: Record<string, unknown>;
 	// Disable reasoning format (use 'none' instead of 'auto')
 	disableReasoningFormat?: boolean;
 	// Generation parameters

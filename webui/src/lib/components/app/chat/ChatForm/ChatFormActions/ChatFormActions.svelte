@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { Square } from '@lucide/svelte';
+	import { Image, Square } from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';
 	import {
 		ChatFormActionFileAttachments,
@@ -7,12 +7,13 @@
 		ChatFormActionSubmit,
 		ModelsSelector
 	} from '$lib/components/app';
+	import * as Tooltip from '$lib/components/ui/tooltip';
 	import { FileTypeCategory } from '$lib/enums';
 	import { getFileTypeCategory } from '$lib/utils';
-	import { config } from '$lib/stores/settings.svelte';
+	import { config, settingsStore } from '$lib/stores/settings.svelte';
 	import { modelsStore, modelOptions, selectedModelId } from '$lib/stores/models.svelte';
 	import { isRouterMode } from '$lib/stores/server.svelte';
-	import { chatStore } from '$lib/stores/chat.svelte';
+	import { chatStore, imageToolsEnabled, setImageToolsEnabled } from '$lib/stores/chat.svelte';
 	import { activeMessages, usedModalities } from '$lib/stores/conversations.svelte';
 	import { useModelChangeValidation } from '$lib/hooks/use-model-change-validation.svelte';
 
@@ -44,6 +45,9 @@
 
 	let currentConfig = $derived(config());
 	let isRouter = $derived(isRouterMode());
+	const imageSystemPrompt =
+		'You are an AI assistant that generates images. When asked to draw or create an image, you MUST use the t2i_model_generation tool to generate the image. Always respond by calling the tool.';
+	let previousSystemPrompt = $state<string | null>(null);
 
 	let conversationModel = $derived(
 		chatStore.getConversationModel(activeMessages() as DatabaseMessage[])
@@ -147,6 +151,27 @@
 		return '';
 	});
 
+	let isImageModeActive = $derived(imageToolsEnabled());
+
+	function toggleImageMode() {
+		const currentPrompt = currentConfig.systemMessage?.toString() ?? '';
+
+		if (imageToolsEnabled()) {
+			settingsStore.updateMultipleConfig({
+				systemMessage: previousSystemPrompt ?? '',
+			});
+			setImageToolsEnabled(false);
+			previousSystemPrompt = null;
+			return;
+		}
+
+		previousSystemPrompt = currentPrompt;
+		settingsStore.updateMultipleConfig({
+			systemMessage: imageSystemPrompt
+		});
+		setImageToolsEnabled(true);
+	}
+
 	let selectorModelRef: ModelsSelector | undefined = $state(undefined);
 
 	export function openModelSelector() {
@@ -164,13 +189,47 @@
 </script>
 
 <div class="flex w-full items-center gap-3 {className}" style="container-type: inline-size">
-	<ChatFormActionFileAttachments
-		class="mr-auto"
-		{disabled}
-		{hasAudioModality}
-		{hasVisionModality}
-		{onFileUpload}
-	/>
+	<div class="mr-auto flex items-center gap-1">
+		<ChatFormActionFileAttachments
+			{disabled}
+			{hasAudioModality}
+			{hasVisionModality}
+			{onFileUpload}
+		/>
+
+		<Tooltip.Root>
+			<Tooltip.Trigger>
+				<Button
+					aria-pressed={isImageModeActive}
+					class="h-8 w-8 rounded-full bg-transparent p-0 text-muted-foreground hover:bg-foreground/10 hover:text-foreground {isImageModeActive
+						? 'bg-foreground/10 text-foreground'
+						: ''}"
+					disabled={!hasVisionModality || disabled}
+					onclick={toggleImageMode}
+					type="button"
+				>
+					<span class="sr-only">
+						{isImageModeActive ? 'Disable image generation mode' : 'Enable image generation mode'}
+					</span>
+					<Image class="h-4 w-4" />
+				</Button>
+			</Tooltip.Trigger>
+
+			{#if !hasVisionModality}
+				<Tooltip.Content>
+					<p>Current model does not support image generation</p>
+				</Tooltip.Content>
+			{:else}
+				<Tooltip.Content>
+					<p>
+						{isImageModeActive
+							? 'Image generation mode is on'
+							: 'Enable image generation mode'}
+					</p>
+				</Tooltip.Content>
+			{/if}
+		</Tooltip.Root>
+	</div>
 
 	<ModelsSelector
 		{disabled}

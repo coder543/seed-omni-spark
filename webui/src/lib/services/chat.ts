@@ -87,6 +87,8 @@ export class ChatService {
 			// Other parameters
 			samplers,
 			custom,
+			tools,
+			extra_body,
 			timings_per_token,
 			// Config options
 			disableReasoningFormat
@@ -124,6 +126,13 @@ export class ChatService {
 		// Include model in request if provided (required in ROUTER mode)
 		if (options.model) {
 			requestBody.model = options.model;
+		}
+
+		if (tools !== undefined) {
+			requestBody.tools = tools;
+		}
+		if (extra_body !== undefined) {
+			requestBody.extra_body = extra_body;
 		}
 
 		requestBody.reasoning_format = disableReasoningFormat ? 'none' : 'auto';
@@ -563,7 +572,11 @@ export class ChatService {
 				}
 
 				if (delta.function.arguments) {
-					fn.arguments = (fn.arguments ?? '') + delta.function.arguments;
+					if (delta.function.arguments.trim().startsWith('{')) {
+						fn.arguments = delta.function.arguments;
+					} else {
+						fn.arguments = (fn.arguments ?? '') + delta.function.arguments;
+					}
 				}
 
 				target.function = fn;

@@ -187,6 +187,8 @@ export interface ApiChatCompletionRequest {
 	stream?: boolean;
 	model?: string;
 	return_progress?: boolean;
+	tools?: unknown[];
+	extra_body?: Record<string, unknown>;
 	// Reasoning parameters
 	reasoning_format?: string;
 	// Generation parameters
