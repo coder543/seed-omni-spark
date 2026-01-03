@@ -38,7 +38,7 @@ if [[ ! -x "$PYTHON_BIN" ]]; then
   PYTHON_BIN="python3"
 fi
 
-AUDIO_URL=$("$PYTHON_BIN" - <<'PY'
+AUDIO_URL=$(AUDIO_B64="$AUDIO_B64" "$PYTHON_BIN" - <<'PY'
 import base64, os, sys
 data = os.environ.get("AUDIO_B64", "")
 if not data:
@@ -46,7 +46,7 @@ if not data:
 # Add padding if missing
 pad = (-len(data)) % 4
 data += "=" * pad
-print(base64.b64decode(data).decode("utf-8"), end="")
+print(base64.urlsafe_b64decode(data).decode("utf-8"), end="")
 PY
 )
 AUDIO_URL_LOCAL=$(echo "$AUDIO_URL" | sed 's|http://minio:9000|http://localhost:9000|')

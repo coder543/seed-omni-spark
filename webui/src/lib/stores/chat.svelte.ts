@@ -156,6 +156,7 @@ class ChatStore {
 	private isEditModeActive = $state(false);
 	private addFilesHandler: ((files: File[]) => void) | null = $state(null);
 	private imageToolsEnabled = $state(false);
+	private attachmentStatusMessage = new SvelteMap<string, string>();
 
 	// ─────────────────────────────────────────────────────────────────────────────
 	// Loading State
@@ -288,6 +289,10 @@ class ChatStore {
 
 		const targetId = conversationId || this.activeConversationId;
 		if (targetId) {
+			const existing = this.processingStates.get(targetId);
+			if (existing?.statusMessage && !processingState.statusMessage) {
+				processingState.statusMessage = existing.statusMessage;
+			}
 			this.processingStates.set(targetId, processingState);
 
 			if (targetId === this.activeConversationId) {
@@ -416,6 +421,7 @@ class ChatStore {
 
 		return {
 			status: predictedTokens > 0 ? 'generating' : promptProgress ? 'preparing' : 'idle',
+			statusMessage: undefined,
 			tokensDecoded: predictedTokens,
 			tokensRemaining: outputTokensMax - predictedTokens,
 			contextUsed,
@@ -433,6 +439,46 @@ class ChatStore {
 			promptMs,
 			cacheTokens
 		};
+	}
+
+	private createFallbackProcessingState(): ApiProcessingState {
+		const contextTotal = this.getContextTotal();
+		const currentConfig = config();
+		const outputTokensMax = currentConfig.max_tokens || -1;
+		return {
+			status: 'preparing',
+			statusMessage: undefined,
+			tokensDecoded: 0,
+			tokensRemaining: outputTokensMax,
+			contextUsed: 0,
+			contextTotal,
+			outputTokensUsed: 0,
+			outputTokensMax,
+			hasNextToken: false,
+			tokensPerSecond: 0,
+			temperature: currentConfig.temperature ?? 0.8,
+			topP: currentConfig.top_p ?? 0.95,
+			speculative: false
+		};
+	}
+
+	private setAttachmentProcessingMessage(convId: string, message: string | null): void {
+		if (!convId) return;
+		if (!message) {
+			this.attachmentStatusMessage.delete(convId);
+		} else {
+			this.attachmentStatusMessage.set(convId, message);
+		}
+		const current = this.processingStates.get(convId) || this.createFallbackProcessingState();
+		const next: ApiProcessingState = {
+			...current,
+			status: current.status === 'idle' ? 'preparing' : current.status,
+			statusMessage: message || undefined
+		};
+		this.processingStates.set(convId, next);
+		if (convId === this.activeConversationId) {
+			this.activeProcessingState = next;
+		}
 	}
 
 	/**
@@ -613,9 +659,10 @@ class ChatStore {
 		this.startStreaming();
 		this.setActiveProcessingConversation(assistantMessage.convId);
 
-		const abortController = this.getOrCreateAbortController(assistantMessage.convId);
+			const abortController = this.getOrCreateAbortController(assistantMessage.convId);
+			this.setAttachmentProcessingMessage(assistantMessage.convId, null);
 
-		await ChatService.sendMessage(
+			await ChatService.sendMessage(
 			allMessages,
 			{
 				...this.getApiOptions(),
@@ -631,18 +678,31 @@ class ChatStore {
 					const idx = conversationsStore.findMessageIndex(assistantMessage.id);
 					conversationsStore.updateMessageAtIndex(idx, { thinking: streamedReasoningContent });
 				},
-				onToolCallChunk: (toolCallChunk: string) => {
-					const chunk = toolCallChunk.trim();
-					if (!chunk) return;
-					streamedToolCallContent = chunk;
-					const idx = conversationsStore.findMessageIndex(assistantMessage.id);
-					conversationsStore.updateMessageAtIndex(idx, { toolCalls: streamedToolCallContent });
-				},
-				onAudioChunk: (base64Data: string, mimeType?: string) => {
-					if (!mimeType?.includes('wav')) return;
-					if (base64Data.length > MAX_STREAMING_AUDIO_BASE64) return;
-					this.enqueueStreamingAudio(assistantMessage.convId, base64Data);
-				},
+					onToolCallChunk: (toolCallChunk: string) => {
+						const chunk = toolCallChunk.trim();
+						if (!chunk) return;
+						streamedToolCallContent = chunk;
+						const idx = conversationsStore.findMessageIndex(assistantMessage.id);
+						conversationsStore.updateMessageAtIndex(idx, { toolCalls: streamedToolCallContent });
+						if (chunk.includes('"t2i_model_generation"')) {
+							this.setAttachmentProcessingMessage(assistantMessage.convId, 'Rendering image...');
+						}
+					},
+					onAudioChunk: (base64Data: string, mimeType?: string) => {
+						if (!mimeType?.includes('audio')) return;
+						this.setAttachmentProcessingMessage(assistantMessage.convId, 'Decoding audio...');
+					},
+					onAudioProgress: (received?: number, decoded?: number) => {
+						if (!received && !decoded) return;
+						const receivedCount = received ?? 0;
+						const decodedCount = decoded ?? 0;
+						if (receivedCount > 0) {
+							this.setAttachmentProcessingMessage(
+								assistantMessage.convId,
+								`Decoding audio: ${decodedCount}/${receivedCount} tokens`
+							);
+						}
+					},
 				onModel: (modelName: string) => recordModel(modelName),
 				onTimings: (timings?: ChatMessageTimings, promptProgress?: ChatMessagePromptProgress) => {
 					const tokensPerSecond =
@@ -668,8 +728,9 @@ class ChatStore {
 					toolCallContent?: string,
 					audioUrl?: string
 				) => {
-					this.stopStreaming();
-					this.stopStreamingAudio(assistantMessage.convId);
+						this.stopStreaming();
+						this.stopStreamingAudio(assistantMessage.convId);
+						this.setAttachmentProcessingMessage(assistantMessage.convId, null);
 
 					const assistantExtras = this.buildAssistantExtras(
 						toolCallContent || streamedToolCallContent,
@@ -720,15 +781,17 @@ class ChatStore {
 						this.setChatLoading(assistantMessage.convId, false);
 						this.clearChatStreaming(assistantMessage.convId);
 						this.clearProcessingState(assistantMessage.convId);
+						this.setAttachmentProcessingMessage(assistantMessage.convId, null);
 
 						return;
 					}
 
 					console.error('Streaming error:', error);
 
-					this.setChatLoading(assistantMessage.convId, false);
-					this.clearChatStreaming(assistantMessage.convId);
-					this.clearProcessingState(assistantMessage.convId);
+						this.setChatLoading(assistantMessage.convId, false);
+						this.clearChatStreaming(assistantMessage.convId);
+						this.clearProcessingState(assistantMessage.convId);
+						this.setAttachmentProcessingMessage(assistantMessage.convId, null);
 
 					const idx = conversationsStore.findMessageIndex(assistantMessage.id);
 

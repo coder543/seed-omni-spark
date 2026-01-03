@@ -4,6 +4,8 @@ import path from 'path';
 import fs from 'fs';
 import crypto from 'crypto';
 import { Readable } from 'stream';
+import os from 'os';
+import { spawn } from 'child_process';
 import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
 
 const app = express();
@@ -32,6 +34,7 @@ const S3_FORCE_PATH_STYLE = (process.env.S3_FORCE_PATH_STYLE || '1') !== '0';
 const MODEL_ID = 'naver-hyperclovax/HyperCLOVAX-SEED-Omni-8B';
 const OMNI_MODEL_ID = 'track_b_model';
 const IMAGE_DEBUG = process.env.IMAGE_DEBUG === '1';
+const AUDIO_DEBUG_DIR = process.env.AUDIO_DEBUG_DIR || '';
 
 const s3Enabled = Boolean(S3_ENDPOINT && S3_ACCESS_KEY && S3_SECRET_KEY && S3_BUCKET);
 const s3 = s3Enabled
@@ -354,38 +357,66 @@ async function streamSseWithTransform(upstream, res, options = {}) {
   let thinkCarry = '';
   let thinkInProgress = false;
   let audioTokenBuffer = [];
-  let audioPcmChunks = [];
-  let audioSpec = null;
-  let audioDecodeFailed = false;
+  let allAudioTokens = [];
+  let audioWavChunks = [];
+  let audioProgressDecodeFailed = false;
+  let audioFinalDecodeFailed = false;
   let audioDecodeQueue = Promise.resolve();
+  let audioTokensReceived = 0;
+  let audioTokensDecoded = 0;
+  let audioProgressLastSent = 0;
+  let deferFinalFlush = false;
   const audioChunkSize =
     Number.isFinite(AUDIO_TOKEN_CHUNK_SIZE) && AUDIO_TOKEN_CHUNK_SIZE > 0
       ? AUDIO_TOKEN_CHUNK_SIZE
       : 150;
 
+  const emitAudioProgress = () => {
+    const payload = {
+      id: meta.id || `chatcmpl-${crypto.randomUUID().replace(/-/g, '')}`,
+      object: 'chat.completion.chunk',
+      created: meta.created || Math.floor(Date.now() / 1000),
+      model: meta.model || 'track_b_model',
+      choices: [{ index: 0, delta: {} }],
+      audio_progress: {
+        received: audioTokensReceived,
+        decoded: audioTokensDecoded
+      }
+    };
+    res.write(`data: ${JSON.stringify(payload)}\n\n`);
+  };
+
   const queueAudioDecode = (chunkTokens) => {
     audioDecodeQueue = audioDecodeQueue.then(async () => {
-      if (audioDecodeFailed || chunkTokens.length < 3) return;
+      if (audioProgressDecodeFailed || chunkTokens.length < 3) return;
       const wavBuf = await fetchTorchserveWav(chunkTokens, extractSpeakerId(fullContent) || AUDIO_TORCHSERVE_SPEAKER);
       if (!wavBuf) {
-        audioDecodeFailed = true;
+        audioProgressDecodeFailed = true;
         return;
       }
-      emitAudioDelta(res, meta, { format: 'audio/wav', data: wavBuf.toString('base64') });
-      const parsed = parseWav(wavBuf);
-      if (!parsed) {
-        audioDecodeFailed = true;
-        return;
+      audioWavChunks.push(wavBuf);
+      if (shouldWriteAudioDebug()) {
+        try {
+          safeMkdir(AUDIO_DEBUG_DIR);
+          const name = `audio-chunk-${String(audioWavChunks.length).padStart(4, '0')}.wav`;
+          fs.writeFileSync(path.join(AUDIO_DEBUG_DIR, name), wavBuf);
+        } catch (err) {
+          console.warn('audio-debug: failed to write chunk', err);
+        }
       }
-      if (!audioSpec) {
-        audioSpec = parsed;
-      }
-      audioPcmChunks.push(parsed.data);
+      audioTokensDecoded += chunkTokens.length;
+      emitAudioProgress();
     });
   };
 
   const enqueueAudioTokens = (newTokens) => {
     if (!newTokens || newTokens.length === 0) return;
+    allAudioTokens.push(...newTokens);
+    audioTokensReceived += newTokens.length;
+    if (audioTokensReceived - audioProgressLastSent >= audioChunkSize) {
+      audioProgressLastSent = audioTokensReceived;
+      emitAudioProgress();
+    }
     audioTokenBuffer.push(...newTokens);
     while (audioTokenBuffer.length >= audioChunkSize) {
       const chunk = audioTokenBuffer.splice(0, audioChunkSize);
@@ -519,8 +550,12 @@ async function streamSseWithTransform(upstream, res, options = {}) {
           if (!data) continue;
           if (data === '[DONE]') {
             doneSeen = true;
-            await flushExtras();
-            res.write('data: [DONE]\n\n');
+            if (audioTokenDetected) {
+              deferFinalFlush = true;
+            } else {
+              await flushExtras();
+              res.write('data: [DONE]\n\n');
+            }
             continue;
           }
           try {
@@ -620,6 +655,25 @@ async function streamSseWithTransform(upstream, res, options = {}) {
       }
     }
     if (audioTokenDetected && !audio) {
+      if (prefixBuffer) {
+        const cleaned = stripTranscriptTags(prefixBuffer);
+        if (cleaned) {
+          const segments = splitThinkSegments(cleaned);
+          if (segments.length > 0) {
+            emitSegments(
+              {
+                id: meta.id || `chatcmpl-${crypto.randomUUID().replace(/-/g, '')}`,
+                object: 'chat.completion.chunk',
+                created: meta.created || Math.floor(Date.now() / 1000),
+                model: meta.model || 'track_b_model',
+                choices: [{ index: 0, delta: { content: '' } }]
+              },
+              segments
+            );
+          }
+        }
+        prefixBuffer = '';
+      }
       if (audioTokenBuffer.length > 0) {
         const remaining = audioTokenBuffer.splice(0, audioTokenBuffer.length);
         queueAudioDecode(remaining);
@@ -627,21 +681,43 @@ async function streamSseWithTransform(upstream, res, options = {}) {
       try {
         await audioDecodeQueue;
       } catch {
-        audioDecodeFailed = true;
+        audioProgressDecodeFailed = true;
       }
-      if (!audioDecodeFailed && audioPcmChunks.length > 0 && audioSpec) {
-        const combined = Buffer.concat(audioPcmChunks);
-        const wavOut = buildWavFromPcm(
-          combined,
-          audioSpec.sampleRate,
-          audioSpec.numChannels,
-          audioSpec.bitsPerSample
+      let finalWav;
+      if (!audioProgressDecodeFailed && audioWavChunks.length > 0) {
+        try {
+          finalWav = await concatWavBuffers(audioWavChunks);
+        } catch {
+          finalWav = undefined;
+        }
+      }
+      if (!finalWav && !audioFinalDecodeFailed && allAudioTokens.length >= 3) {
+        const wavBuf = await fetchTorchserveWav(
+          allAudioTokens,
+          extractSpeakerId(fullContent) || AUDIO_TORCHSERVE_SPEAKER
         );
-        audio = { format: 'audio/wav', data: wavOut.toString('base64') };
+        if (wavBuf) {
+          finalWav = wavBuf;
+        } else {
+          audioFinalDecodeFailed = true;
+        }
+      }
+      if (!finalWav && audioWavChunks.length > 0) {
+        try {
+          finalWav = await concatWavBuffers(audioWavChunks);
+        } catch {
+          finalWav = undefined;
+        }
+      }
+      if (finalWav) {
+        audio = { format: 'audio/wav', data: finalWav.toString('base64') };
       }
     }
     if (!doneSeen) {
       await flushExtras();
+    } else if (deferFinalFlush) {
+      await flushExtras();
+      res.write('data: [DONE]\n\n');
     }
     res.end();
   }
@@ -1097,6 +1173,40 @@ async function fetchTorchserveWav(units, speaker) {
   }
 }
 
+async function concatWavBuffers(buffers) {
+  if (!buffers || buffers.length === 0) return undefined;
+  if (buffers.length === 1) return buffers[0];
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'omni-audio-'));
+  try {
+    const listPath = path.join(tmpDir, 'list.txt');
+    const outPath = path.join(tmpDir, 'out.wav');
+    const entries = [];
+    buffers.forEach((buf, idx) => {
+      const name = `chunk-${idx}.wav`;
+      const filePath = path.join(tmpDir, name);
+      fs.writeFileSync(filePath, buf);
+      entries.push(`file '${name}'`);
+    });
+    fs.writeFileSync(listPath, entries.join('\n'));
+    await new Promise((resolve, reject) => {
+      const proc = spawn('ffmpeg', ['-y', '-f', 'concat', '-safe', '0', '-i', listPath, '-c', 'copy', outPath], {
+        stdio: ['ignore', 'ignore', 'pipe']
+      });
+      let stderr = '';
+      proc.stderr.on('data', (chunk) => {
+        stderr += chunk.toString();
+      });
+      proc.on('close', (code) => {
+        if (code === 0) resolve();
+        else reject(new Error(stderr || `ffmpeg exited with code ${code}`));
+      });
+    });
+    return fs.readFileSync(outPath);
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+}
+
 function parseWav(buf) {
   if (!buf || buf.length < 44) return undefined;
   if (buf.toString('ascii', 0, 4) !== 'RIFF' || buf.toString('ascii', 8, 12) !== 'WAVE') {
@@ -1227,3 +1337,11 @@ app.listen(PORT, () => {
   // eslint-disable-next-line no-console
   console.log(`webui-proxy listening on :${PORT} -> ${OMNI_BASE}`);
 });
+function safeMkdir(dir) {
+  if (!dir) return;
+  fs.mkdirSync(dir, { recursive: true });
+}
+
+function shouldWriteAudioDebug() {
+  return Boolean(AUDIO_DEBUG_DIR);
+}

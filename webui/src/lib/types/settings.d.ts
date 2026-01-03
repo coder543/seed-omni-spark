@@ -54,6 +54,8 @@ export interface SettingsChatServiceOptions {
 	onChunk?: (chunk: string) => void;
 	onReasoningChunk?: (chunk: string) => void;
 	onToolCallChunk?: (chunk: string) => void;
+	onAudioChunk?: (base64Data: string, mimeType?: string) => void;
+	onAudioProgress?: (received?: number, decoded?: number) => void;
 	onModel?: (model: string) => void;
 	onTimings?: (timings?: ChatMessageTimings, promptProgress?: ChatMessagePromptProgress) => void;
 	onComplete?: (

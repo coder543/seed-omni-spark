@@ -9,6 +9,7 @@ RUN npm run build
 # Runtime
 FROM node:20-bullseye-slim
 WORKDIR /app
+RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg && rm -rf /var/lib/apt/lists/*
 COPY --from=build /app/public /app/public
 COPY webui-proxy/package.json webui-proxy/package-lock.json* ./
 RUN npm install --omit=dev

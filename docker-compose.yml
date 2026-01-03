@@ -169,7 +169,7 @@ services:
       dockerfile: Dockerfile
     image: omni-decoder-audio-torchserve:latest
     container_name: omni-decoder-audio-torchserve
-    shm_size: "8g"
+    shm_size: "16g"
     command: [
       "--foreground",
       "--model-store", "/workspace/models",
@@ -217,7 +217,7 @@ services:
     runtime: nvidia
     user: root
     entrypoint: ["/bin/bash", "-c"]
-    command: ["vllm serve /vllm-workspace/llm/model --enable-prompt-embeds --served-model-name track_b_model --chat-template-content-format=string --host 0.0.0.0 --port 10032 --trust-remote-code --enable-auto-tool-choice --tool-call-parser omni --reasoning-parser deepseek_v3 --chat-template /vllm-workspace/chat_template.jinja --reasoning-config '{\"think_start_str\": \"<think>\", \"think_end_str\": \"</think>\"}' --gpu-memory-utilization 0.35 --enforce-eager"]
+    command: ["vllm serve /vllm-workspace/llm/model --enable-prompt-embeds --served-model-name track_b_model --chat-template-content-format=string --host 0.0.0.0 --port 10032 --trust-remote-code --enable-auto-tool-choice --tool-call-parser omni --reasoning-parser deepseek_v3 --chat-template /vllm-workspace/chat_template.jinja --reasoning-config '{\"think_start_str\": \"<think>\", \"think_end_str\": \"</think>\"}' --gpu-memory-utilization ${OMNI_VLLM_GPU_MEMORY_UTILIZATION:-0.35} ${OMNI_VLLM_EXTRA_ARGS:-}"]
     ports:
       - "${OMNI_PORT:-10032}:10032"
     volumes:
@@ -271,7 +271,8 @@ services:
       - OMNI_BASE=http://omni-chainer:8000
       - PORT=${WEBUI_PORT:-3000}
       - MINIO_ENDPOINT=http://minio:9000
-      - AUDIO_TOKEN_CHUNK_SIZE=50
+      - AUDIO_TOKEN_CHUNK_SIZE=25
+      - AUDIO_DEBUG_DIR=${AUDIO_DEBUG_DIR:-}
       - IMAGE_DEBUG=${IMAGE_DEBUG:-0}
       - NCP_S3_ENDPOINT=${NCP_S3_ENDPOINT}
       - NCP_S3_REGION=${NCP_S3_REGION}
@@ -281,6 +282,8 @@ services:
       - S3_FORCE_PATH_STYLE=${S3_FORCE_PATH_STYLE:-1}
     ports:
       - "${WEBUI_HOST:-0.0.0.0}:${WEBUI_PORT:-3000}:3000"
+    volumes:
+      - ./samples/audio-debug:/app/audio-debug
     depends_on:
       - omni-chainer
     networks:

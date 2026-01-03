@@ -61,6 +61,8 @@ export class ChatService {
 			onError,
 			onReasoningChunk,
 			onToolCallChunk,
+			onAudioChunk,
+			onAudioProgress,
 			onModel,
 			onTimings,
 			// Generation parameters
@@ -196,18 +198,20 @@ export class ChatService {
 			}
 
 			if (stream) {
-				await ChatService.handleStreamResponse(
-					response,
-					onChunk,
-					onComplete,
-					onError,
-					onReasoningChunk,
-					onToolCallChunk,
-					onModel,
-					onTimings,
-					conversationId,
-					signal
-				);
+					await ChatService.handleStreamResponse(
+						response,
+						onChunk,
+						onComplete,
+						onError,
+						onReasoningChunk,
+						onToolCallChunk,
+						onAudioChunk,
+						onAudioProgress,
+						onModel,
+						onTimings,
+						conversationId,
+						signal
+					);
 				return;
 			} else {
 				return ChatService.handleNonStreamResponse(
@@ -281,6 +285,8 @@ export class ChatService {
 		onError?: (error: Error) => void,
 		onReasoningChunk?: (chunk: string) => void,
 		onToolCallChunk?: (chunk: string) => void,
+		onAudioChunk?: (base64Data: string, mimeType?: string) => void,
+		onAudioProgress?: (received?: number, decoded?: number) => void,
 		onModel?: (model: string) => void,
 		onTimings?: (timings?: ChatMessageTimings, promptProgress?: ChatMessagePromptProgress) => void,
 		conversationId?: string,
@@ -371,6 +377,9 @@ export class ChatService {
 							const toolCalls = parsed.choices[0]?.delta?.tool_calls;
 							const audioData = parsed.choices[0]?.delta?.audio?.data;
 							const audioFormat = parsed.choices[0]?.delta?.audio?.format;
+							const audioProgress = (parsed as ApiChatCompletionStreamChunk & {
+								audio_progress?: { received?: number; decoded?: number };
+							}).audio_progress;
 							const timings = parsed.timings;
 							const promptProgress = parsed.prompt_progress;
 
@@ -387,6 +396,10 @@ export class ChatService {
 							if (timings) {
 								ChatService.notifyTimings(timings, promptProgress, onTimings);
 								lastTimings = timings;
+							}
+
+							if (audioProgress) {
+								onAudioProgress?.(audioProgress.received, audioProgress.decoded);
 							}
 
 							if (content) {
@@ -408,6 +421,9 @@ export class ChatService {
 							processToolCallDelta(toolCalls);
 
 							if (audioData) {
+								if (audioFormat && audioFormat.startsWith('audio/')) {
+									onAudioChunk?.(audioData, audioFormat);
+								}
 								audioUrl = ChatService.decodeAudioData(audioData, audioFormat);
 							}
 						} catch (e) {

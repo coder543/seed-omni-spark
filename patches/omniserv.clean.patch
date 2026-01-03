@@ -1,3 +1,14 @@
+diff --git a/decoder/audio/codec/config.properties b/decoder/audio/codec/config.properties
+index 8a071a3..058b9a8 100644
+--- a/decoder/audio/codec/config.properties
++++ b/decoder/audio/codec/config.properties
+@@ -4,4 +4,5 @@ metrics_address=http://0.0.0.0:8083
+ disable_token_authorization=true
+ default_startup_timeout=600
+ default_response_timeout=300
+-
++max_response_size=104857600
++max_request_size=104857600
 diff --git a/decoder/audio/codec/requirements.txt b/decoder/audio/codec/requirements.txt
 index 85f9d87..053b819 100644
 --- a/decoder/audio/codec/requirements.txt

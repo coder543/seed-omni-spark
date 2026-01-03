@@ -110,6 +110,9 @@ export function useProcessingState(): UseProcessingStateReturn {
 	}
 
 	function getProcessingMessage(): string {
+		if (processingState?.statusMessage) {
+			return processingState.statusMessage;
+		}
 		if (!processingState) {
 			return 'Processing...';
 		}
@@ -137,6 +140,9 @@ export function useProcessingState(): UseProcessingStateReturn {
 		}
 
 		const details: string[] = [];
+		if (stateToUse.statusMessage) {
+			details.push(stateToUse.statusMessage);
+		}
 
 		// Always show context info when we have valid data
 		if (stateToUse.contextUsed >= 0 && stateToUse.contextTotal > 0) {

@@ -200,6 +200,25 @@ If you need more throughput and can tolerate higher memory usage, try:
 --gpu-memory-utilization 0.45
 ```
 
+### CUDAGraph / Eager Mode
+
+The DGX Spark uses unified memory and a Blackwell GPU. vLLM can optionally use CUDA Graphs for speed, but some Blackwell + multimodal stacks are more stable in eager mode. We default to eager mode and expose these knobs via env vars:
+
+- `OMNI_VLLM_GPU_MEMORY_UTILIZATION` (defaults to `0.35`)
+- `OMNI_VLLM_EXTRA_ARGS` (optional flags passed to `vllm serve`)
+
+Examples:
+
+```
+# Keep eager (more stable, slower)
+OMNI_VLLM_EXTRA_ARGS="--enforce-eager"
+
+# Try cudagraph capture (faster if stable)
+OMNI_VLLM_EXTRA_ARGS="--cudagraph-capture-sizes 1 2 4 8"
+```
+
+If you see slow throughput, try enabling cudagraph. If you see crashes or weird latency spikes, revert to `--enforce-eager`.
+
 ---
 
 ## Notes on Image Generation

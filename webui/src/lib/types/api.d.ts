@@ -260,6 +260,10 @@ export interface ApiChatCompletionStreamChunk {
 		cache_n?: number;
 	};
 	prompt_progress?: ChatMessagePromptProgress;
+	audio_progress?: {
+		received?: number;
+		decoded?: number;
+	};
 }
 
 export interface ApiChatCompletionResponse {
@@ -339,6 +343,7 @@ export interface ApiSlotData {
 
 export interface ApiProcessingState {
 	status: 'initializing' | 'generating' | 'preparing' | 'idle';
+	statusMessage?: string;
 	tokensDecoded: number;
 	tokensRemaining: number;
 	contextUsed: number;
