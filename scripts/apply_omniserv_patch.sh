@@ -29,6 +29,11 @@ if command -v git >/dev/null 2>&1 && [[ -e "$SUBMODULE_DIR/.git" ]]; then
     echo "Applied patch to $SUBMODULE_DIR"
   elif git -C "$SUBMODULE_DIR" apply --reverse --check "$PATCH_ABS" >/dev/null 2>&1; then
     echo "Patch already applied; skipping."
+  elif \
+    rg -q "FROM nvcr.io/nvidia/pytorch:25.10-py3" "$SUBMODULE_DIR/decoder/audio/codec/Dockerfile" 2>/dev/null && \
+    rg -q "max_response_size=104857600" "$SUBMODULE_DIR/decoder/audio/codec/config.properties" 2>/dev/null && \
+    rg -q "audio_sample_rate" "$SUBMODULE_DIR/decoder/audio/track_b/app/configs.py" 2>/dev/null; then
+    echo "Patch appears applied (marker check); skipping."
   else
     echo "Patch did not apply cleanly. Resolve conflicts in $SUBMODULE_DIR." >&2
     exit 1
