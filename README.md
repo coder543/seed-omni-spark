@@ -22,7 +22,7 @@ This repo treats OmniServe as a **git submodule** and applies a small patch set 
 - NVIDIA Container Toolkit
 - Enough disk for model weights (~16GB) + conversions
 
-> This repo assumes the model weights are stored in `/path/to/models` and mounted into containers.
+> By default, model weights live in `./models` (gitignored) and are mounted into containers.
 
 ---
 
@@ -50,8 +50,6 @@ If you want a single command that handles submodules, patching, model download/c
 ```
 
 Note: first-time builds (especially the OmniServe compile step) can take ~20 minutes on DGX Spark, not including model download time.
-```
-```
 
 You can override the model location (default is `./models`):
 
@@ -63,10 +61,10 @@ MODEL_ROOT=/path/to/models ./start.sh
 
 ## 2) Model Weights
 
-We keep weights outside the repo at:
+We keep weights under:
 
 ```
-/path/to/models
+./models
 ```
 
 Download and convert:
@@ -90,22 +88,23 @@ This produces:
 
 ## 3) Environment
 
-Copy and edit `.env` if needed:
+Copy and edit `.env` only if you need overrides (Docker Compose provides defaults):
 
 ```bash
 cp .env.example .env
 ```
 
-Key variables:
+Common overrides:
 
 ```
-OMNI_MODEL_PATH=/path/to/models/track_b/llm/HyperCLOVAX-SEED-Omni-8B
-VISION_ENCODER_PATH=/path/to/models/track_b/ve
-VISION_DECODER_PATH=/path/to/models/track_b/vd
-AUDIO_ENCODER_PATH=/path/to/models/track_b/ae
-AUDIO_DECODER_PATH=/path/to/models/track_b/ad
+# Model paths (defaults are under ./models)
+OMNI_MODEL_PATH=./models/track_b/llm/HyperCLOVAX-SEED-Omni-8B
+OMNI_ENCODER_AUDIO_MODEL_PATH=./models/track_b/ae
+OMNI_ENCODER_VISION_MODEL_PATH=./models/track_b/ve
+OMNI_DECODER_VISION_MODEL_PATH=./models/track_b/vd
+OMNI_DECODER_AUDIO_TORCHSERVE_MODEL_PATH=./models/track_b/ad
 
-# MinIO (local S3)
+# MinIO (local S3 defaults)
 NCP_S3_ENDPOINT=http://minio:9000
 NCP_S3_ACCESS_KEY=minio
 NCP_S3_SECRET_KEY=minio123

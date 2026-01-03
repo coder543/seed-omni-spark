@@ -4,8 +4,8 @@ services:
     container_name: minio
     command: ["server", "/data", "--console-address", ":9001"]
     environment:
-      - MINIO_ROOT_USER=${MINIO_ROOT_USER}
-      - MINIO_ROOT_PASSWORD=${MINIO_ROOT_PASSWORD}
+      - MINIO_ROOT_USER=${MINIO_ROOT_USER:-minio}
+      - MINIO_ROOT_PASSWORD=${MINIO_ROOT_PASSWORD:-minio123}
     ports:
       - "9000:9000"
       - "9001:9001"
@@ -21,9 +21,9 @@ services:
       - minio
     entrypoint: ["/bin/sh", "-c"]
     command: >
-      "until mc alias set local http://minio:9000 ${MINIO_ROOT_USER} ${MINIO_ROOT_PASSWORD}; do sleep 2; done;
-       mc mb -p local/${NCP_S3_BUCKET_NAME} || true;
-       mc anonymous set download local/${NCP_S3_BUCKET_NAME} || true;
+      "until mc alias set local http://minio:9000 ${MINIO_ROOT_USER:-minio} ${MINIO_ROOT_PASSWORD:-minio123}; do sleep 2; done;
+       mc mb -p local/${NCP_S3_BUCKET_NAME:-omni} || true;
+       mc anonymous set download local/${NCP_S3_BUCKET_NAME:-omni} || true;
        tail -f /dev/null"
     networks:
       - encoder-network
@@ -38,7 +38,7 @@ services:
     ports:
       - "${OMNI_ENCODER_AUDIO_API_PORT:-10002}:8002"
     volumes:
-      - ${OMNI_ENCODER_AUDIO_MODEL_PATH}:/workspace/app/model/weights:ro
+      - ${OMNI_ENCODER_AUDIO_MODEL_PATH:-models/track_b/ae}:/workspace/app/model/weights:ro
     environment:
       - CONFIG_PATH=/workspace/config.json
       - MODEL_ID=${OMNI_ENCODER_AUDIO_MODEL_ID}
@@ -72,7 +72,7 @@ services:
     ports:
       - "${OMNI_ENCODER_VISION_API_PORT:-10064}:8000"
     volumes:
-      - ${OMNI_ENCODER_VISION_MODEL_PATH}:/workspace/app/model/weights:ro
+      - ${OMNI_ENCODER_VISION_MODEL_PATH:-models/track_b/ve}:/workspace/app/model/weights:ro
     environment:
       - CONFIG_PATH=/workspace/config.json
       - MODEL_ID=${OMNI_ENCODER_VISION_MODEL_ID}
@@ -104,12 +104,12 @@ services:
     image: omni-decoder-vision-api:latest
     volumes:
       - torch-cache:/app/.cache/torch
-      - ${OMNI_DECODER_VISION_MODEL_PATH}/scheduler:/app/track_b/scheduler:ro
-      - ${OMNI_DECODER_VISION_MODEL_PATH}/transformer:/app/track_b/transformer:ro
-      - ${OMNI_DECODER_VISION_MODEL_PATH}/transformer2:/app/track_b/transformer2:ro
-      - ${OMNI_DECODER_VISION_MODEL_PATH}/vae:/app/track_b/vae:ro
-      - ${OMNI_DECODER_VISION_MODEL_PATH}/token_embedder:/app/track_b/token_embedder:ro
-      - ${OMNI_DECODER_VISION_MODEL_PATH}/model_index.json:/app/track_b/model_index.json:ro
+      - ${OMNI_DECODER_VISION_MODEL_PATH:-models/track_b/vd}/scheduler:/app/track_b/scheduler:ro
+      - ${OMNI_DECODER_VISION_MODEL_PATH:-models/track_b/vd}/transformer:/app/track_b/transformer:ro
+      - ${OMNI_DECODER_VISION_MODEL_PATH:-models/track_b/vd}/transformer2:/app/track_b/transformer2:ro
+      - ${OMNI_DECODER_VISION_MODEL_PATH:-models/track_b/vd}/vae:/app/track_b/vae:ro
+      - ${OMNI_DECODER_VISION_MODEL_PATH:-models/track_b/vd}/token_embedder:/app/track_b/token_embedder:ro
+      - ${OMNI_DECODER_VISION_MODEL_PATH:-models/track_b/vd}/model_index.json:/app/track_b/model_index.json:ro
     container_name: omni-decoder-vision-api
     ports:
       - "${OMNI_DECODER_VISION_API_PORT:-10063}:10063"
@@ -180,7 +180,7 @@ services:
       "--ts-config", "/app/config.properties"
     ]
     volumes:
-      - ${OMNI_DECODER_AUDIO_TORCHSERVE_MODEL_PATH}:/workspace/models:ro
+      - ${OMNI_DECODER_AUDIO_TORCHSERVE_MODEL_PATH:-models/track_b/ad}:/workspace/models:ro
       - ./OmniServe/decoder/audio/codec/config.properties:/app/config.properties:ro
     environment:
       - JAVA_HOME=/usr/lib/jvm/java-11-openjdk-arm64
@@ -227,7 +227,7 @@ services:
       - "${OMNI_PORT:-10032}:10032"
     volumes:
       - ./OmniServe/omni_chainer/tests/chat_template/track_b/chat_template.jinja:/vllm-workspace/chat_template.jinja:ro
-      - ${OMNI_MODEL_PATH}:/vllm-workspace/llm/model:ro
+      - ${OMNI_MODEL_PATH:-models/track_b/llm/HyperCLOVAX-SEED-Omni-8B}:/vllm-workspace/llm/model:ro
     ipc: host
     shm_size: '16gb'
     restart: unless-stopped
@@ -285,11 +285,11 @@ services:
       - IMAGE_TRACE=${IMAGE_TRACE:-0}
       - AUDIO_DEBUG_DIR=${AUDIO_DEBUG_DIR:-}
       - IMAGE_DEBUG=${IMAGE_DEBUG:-0}
-      - NCP_S3_ENDPOINT=${NCP_S3_ENDPOINT}
-      - NCP_S3_REGION=${NCP_S3_REGION}
-      - NCP_S3_ACCESS_KEY=${NCP_S3_ACCESS_KEY}
-      - NCP_S3_SECRET_KEY=${NCP_S3_SECRET_KEY}
-      - NCP_S3_BUCKET_NAME=${NCP_S3_BUCKET_NAME}
+      - NCP_S3_ENDPOINT=${NCP_S3_ENDPOINT:-http://minio:9000}
+      - NCP_S3_REGION=${NCP_S3_REGION:-us-east-1}
+      - NCP_S3_ACCESS_KEY=${NCP_S3_ACCESS_KEY:-minio}
+      - NCP_S3_SECRET_KEY=${NCP_S3_SECRET_KEY:-minio123}
+      - NCP_S3_BUCKET_NAME=${NCP_S3_BUCKET_NAME:-omni}
       - S3_FORCE_PATH_STYLE=${S3_FORCE_PATH_STYLE:-1}
     ports:
       - "${WEBUI_HOST:-0.0.0.0}:${WEBUI_PORT:-3000}:3000"
