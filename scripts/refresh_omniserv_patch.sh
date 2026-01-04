@@ -16,11 +16,12 @@ mkdir -p "$PATCH_DIR"
 tmp_patch="$(mktemp)"
 trap 'rm -f "$tmp_patch"' EXIT
 
-# Include specific new files in the patch (intent-to-add) so they survive refresh.
-if [[ -f "$SUBMODULE_DIR/decoder/vision/track_b/requirements.min.txt" ]]; then
-  git -C "$SUBMODULE_DIR" add -N decoder/vision/track_b/requirements.min.txt
-  trap 'git -C "$SUBMODULE_DIR" reset -q decoder/vision/track_b/requirements.min.txt >/dev/null 2>&1 || true; rm -f "$tmp_patch"' EXIT
+# Ensure new files are included in the patch, except for the heavy model cache.
+git -C "$SUBMODULE_DIR" add -N .
+if [[ -d "$SUBMODULE_DIR/vllm/vllm/model_executor/models" ]]; then
+  git -C "$SUBMODULE_DIR" reset -q vllm/vllm/model_executor/models/ >/dev/null 2>&1 || true
 fi
+trap 'git -C "$SUBMODULE_DIR" reset -q >/dev/null 2>&1 || true; rm -f "$tmp_patch"' EXIT
 
 git -C "$SUBMODULE_DIR" diff --binary > "$tmp_patch"
 
