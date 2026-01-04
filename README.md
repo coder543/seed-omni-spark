@@ -249,11 +249,10 @@ The patch includes:
 - Audio decoder TorchServe triton pin relaxed for aarch64 compatibility
 - AArch64 vLLM Dockerfile (`docker/vllm.aarch64.dockerfile`)
 
-If you want to regenerate the patch later:
+If you want to regenerate the patch later, use the helper script:
 
 ```
-# assuming you have a clean submodule and a modified OmniServe copy
-# diff -ruN OmniServe OmniServe.modified > patches/omniserv.clean.patch
+./scripts/refresh_omniserv_patch.sh
 ```
 
 ### Auto-refresh Patch on Commit
