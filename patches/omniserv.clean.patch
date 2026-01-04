@@ -1,3 +1,13 @@
+diff --git a/decoder/audio/codec/requirements.txt b/decoder/audio/codec/requirements.txt
+index 85f9d87..c575e2b 100644
+--- a/decoder/audio/codec/requirements.txt
++++ b/decoder/audio/codec/requirements.txt
+@@ -11,4 +11,4 @@ requests==2.32.3
+ scipy<=1.13.1
+ torch==2.5.1
+ torchserve==0.12
+-triton==3.1.0; sys_platform == 'linux'  # for torch and torchserve
++triton>=3.3.0,<3.6; sys_platform == 'linux'  # for torch and torchserve
 diff --git a/decoder/audio/codec/requirements.txt.rej b/decoder/audio/codec/requirements.txt.rej
 new file mode 100644
 index 0000000..00cbd85
