@@ -16,6 +16,12 @@ mkdir -p "$PATCH_DIR"
 tmp_patch="$(mktemp)"
 trap 'rm -f "$tmp_patch"' EXIT
 
+# Include specific new files in the patch (intent-to-add) so they survive refresh.
+if [[ -f "$SUBMODULE_DIR/decoder/vision/track_b/requirements.min.txt" ]]; then
+  git -C "$SUBMODULE_DIR" add -N decoder/vision/track_b/requirements.min.txt
+  trap 'git -C "$SUBMODULE_DIR" reset -q decoder/vision/track_b/requirements.min.txt >/dev/null 2>&1 || true; rm -f "$tmp_patch"' EXIT
+fi
+
 git -C "$SUBMODULE_DIR" diff --binary > "$tmp_patch"
 
 if [[ -f "$PATCH_FILE" ]]; then
