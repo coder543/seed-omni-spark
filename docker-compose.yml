@@ -264,6 +264,15 @@ services:
     volumes:
       - ./OmniServe/omni_chainer/tests/chat_template/track_b/chat_template.jinja:/vllm-workspace/chat_template.jinja:ro
       - ${OMNI_MODEL_PATH:-models/track_b/llm/HyperCLOVAX-SEED-Omni-8B}:/vllm-workspace/llm/model:ro
+    environment:
+      - NCP_S3_ENDPOINT=${NCP_S3_ENDPOINT:-http://minio:9000}
+      - NCP_S3_SERVICE=${NCP_S3_SERVICE:-s3}
+      - NCP_S3_REGION=${NCP_S3_REGION:-us-east-1}
+      - NCP_S3_ACCESS_KEY=${NCP_S3_ACCESS_KEY:-minio}
+      - NCP_S3_SECRET_KEY=${NCP_S3_SECRET_KEY:-minio123}
+      - NCP_S3_BUCKET_NAME=${NCP_S3_BUCKET_NAME:-omni}
+      - WBL_S3_BUCKET_NAME=${WBL_S3_BUCKET_NAME:-omni}
+      - S3_FORCE_PATH_STYLE=${S3_FORCE_PATH_STYLE:-1}
     ipc: host
     shm_size: '16gb'
     restart: unless-stopped
