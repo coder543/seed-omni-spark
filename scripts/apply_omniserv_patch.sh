@@ -15,6 +15,10 @@ if [[ ! -d "$SUBMODULE_DIR" ]]; then
 fi
 
 if command -v git >/dev/null 2>&1 && [[ -e "$SUBMODULE_DIR/.git" ]]; then
+  # Reset submodule to a clean state before applying the patch.
+  git -C "$SUBMODULE_DIR" reset --hard
+  git -C "$SUBMODULE_DIR" clean -fdx
+
   # Use an absolute path so git -C can find the patch file.
   PATCH_ABS="$PATCH_FILE"
   if command -v realpath >/dev/null 2>&1; then
@@ -27,13 +31,6 @@ if command -v git >/dev/null 2>&1 && [[ -e "$SUBMODULE_DIR/.git" ]]; then
   if git -C "$SUBMODULE_DIR" apply --check "$PATCH_ABS" >/dev/null 2>&1; then
     git -C "$SUBMODULE_DIR" apply "$PATCH_ABS"
     echo "Applied patch to $SUBMODULE_DIR"
-  elif git -C "$SUBMODULE_DIR" apply --reverse --check "$PATCH_ABS" >/dev/null 2>&1; then
-    echo "Patch already applied; skipping."
-  elif \
-    rg -q "FROM nvcr.io/nvidia/pytorch:25.10-py3" "$SUBMODULE_DIR/decoder/audio/codec/Dockerfile" 2>/dev/null && \
-    rg -q "max_response_size=104857600" "$SUBMODULE_DIR/decoder/audio/codec/config.properties" 2>/dev/null && \
-    rg -q "audio_sample_rate" "$SUBMODULE_DIR/decoder/audio/track_b/app/configs.py" 2>/dev/null; then
-    echo "Patch appears applied (marker check); skipping."
   else
     echo "Patch did not apply cleanly. Resolve conflicts in $SUBMODULE_DIR." >&2
     exit 1
