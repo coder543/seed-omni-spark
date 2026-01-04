@@ -9,6 +9,10 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+# Ensure sample output directory exists and is writable by the current user.
+mkdir -p "$ROOT_DIR/samples"
+chown -R "$(id -u)":"$(id -g)" "$ROOT_DIR/samples" 2>/dev/null || true
+
 # Configurable locations
 MODEL_ROOT="${MODEL_ROOT:-$ROOT_DIR/models}"
 TRACK_B_DIR="$MODEL_ROOT/track_b"
