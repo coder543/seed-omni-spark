@@ -1,0 +1,25 @@
+diff --git a/docker/omni_decoder_vision.dockerfile b/docker/omni_decoder_vision.dockerfile
+index 566aa2a..5c80921 100644
+--- a/docker/omni_decoder_vision.dockerfile
++++ b/docker/omni_decoder_vision.dockerfile
+@@ -1,4 +1,4 @@
+-FROM pytorch/pytorch:2.6.0-cuda12.4-cudnn9-devel
++FROM nvcr.io/nvidia/pytorch:25.10-py3
+ 
+ RUN apt-get update && apt-get install -y \
+     git \
+@@ -12,11 +12,11 @@ WORKDIR /app/track_b
+ 
+ RUN pip install --no-cache-dir --upgrade pip
+ RUN pip install --no-cache-dir ninja packaging && \
+-    pip install --no-cache-dir flash-attn --no-build-isolation
++    (pip install --no-cache-dir flash-attn --no-build-isolation || true)
+     
+ COPY decoder/vision/track_b/ /app/track_b/
+-RUN pip install -r requirements.txt && \
+-    pip install --no-cache-dir uvicorn einops accelerate
++RUN pip install --no-cache-dir --no-deps -r requirements.min.txt
++RUN pip uninstall -y torchao || true
+ 
+ COPY util/storage/wbl_storage_utility /wbl_storage_utility
+ RUN pip install --no-cache-dir /wbl_storage_utility
