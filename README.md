@@ -244,9 +244,10 @@ Image generation requires the tool call to return **discrete image tokens**. Som
 The patch includes:
 
 - DGX Spark‑friendly Dockerfiles (CUDA 13.x base)
-- torchao pin for CUDA 13 compatibility
-- vLLM model registry sync (added `vllm/model_executor/models`)
-- decoder requirements adjustments
+- Vision decoder CUDA-safe dependency lock (`requirements.min.txt`) installed with `--no-deps`
+- Vision encoder aarch64-safe requirements (`requirements.aarch64.txt`)
+- Audio decoder TorchServe triton pin relaxed for aarch64 compatibility
+- AArch64 vLLM Dockerfile (`docker/vllm.aarch64.dockerfile`)
 
 If you want to regenerate the patch later:
 
